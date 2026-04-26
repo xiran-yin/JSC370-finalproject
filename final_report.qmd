@@ -96,36 +96,35 @@ np.random.seed(42)
 
 Public transit is the circulatory system of any large city, and its reliability shapes how millions of people experience daily life. The Toronto Transit Commission (TTC) carries over one million riders per day across one of North America's largest subway networks, making service disruptions both economically costly and socially consequential. While many causes of delay — equipment failures, passenger incidents, security investigations — are largely random from a forecasting perspective, **weather** is one of the few systematic, externally observable, and forecastable variables that plausibly drives day-to-day delay patterns. Cold snaps freeze track switches; heavy snow buries third rails; extreme heat causes rail steel to expand and buckle; and heavy rain can flood at-grade sections of the line.
 
-This project investigates whether and how daily weather conditions predict TTC subway delays, by integrating **12 years of meteorological observations (2014–2025)** with the City of Toronto's complete public record of subway delay incidents. Beyond explanation, the project also asks a forward-looking question: **can a machine learning model, given only weather forecasts, predict whether tomorrow will be a "severe delay day"?** A reliable answer would have practical value for both transit operators (resource pre-positioning) and riders (alternative-route planning).
+This project investigates whether and how daily weather conditions predict TTC subway delays, by integrating **12 years of meteorological observations (2014–2025)** with the City of Toronto's complete public record of subway delay incidents.
 
-To complement the quantitative analysis, the project also draws on **rider posts from Reddit's `r/TTC` community**, which serve as an independent qualitative signal of how riders themselves perceive service quality. Sentiment analysis and topic modelling of this discourse provide a "ground-truth check" on the regression and ML findings: do riders in fact complain more on the days that our models flag as severe?
+## Central Research Question
 
-## Research Questions and Hypotheses
+> **Can daily weather conditions predict TTC subway delays, and if so, which weather features matter most — both for explaining day-to-day variation in delay duration and for forecasting severe delay days?**
 
-The analysis is organized around five research questions. The first four are inferential (about the structure of the weather–delay relationship); the fifth is predictive (about how well that relationship can be turned into a forecasting tool).
+This single question has two complementary halves: an *explanatory* half (which weather variables are associated with delays, and how?) and a *predictive* half (can we turn that association into a forecasting tool?). The two halves correspond to two formal hypotheses, each with an explicit null and alternative.
 
-1. **RQ1.** Is there a statistically significant association between adverse weather (precipitation, snowfall, extreme temperature) and total daily TTC delay duration?
-2. **RQ2.** How does the distribution of delays vary across discrete weather categories (Clear, Light Rain/Snow, Heavy Rain/Snow)?
-3. **RQ3.** Do temporal factors (month, day-of-week, weekend status) independently moderate the weather–delay relationship after weather is controlled for?
-4. **RQ4.** Is the precipitation–delay relationship linear, or does it exhibit non-linear threshold or saturation behaviour? Likewise for temperature?
-5. **RQ5.** Can a supervised machine learning model trained on weather and temporal features predict (a) total daily delay duration (regression) and (b) whether a given day is a severe delay day (classification)? Which predictors carry the most weight, and do they agree with the inferential findings?
+## Hypotheses
 
-A sixth qualitative question accompanies the NLP component:
+**H₁ — Explanatory.** *Adverse weather (precipitation, snowfall, and extreme temperature) is associated with longer total daily TTC delays, with potentially non-linear functional form.*
 
-6. **RQ6.** Does rider sentiment on social media correspond to model-flagged severe delay days, and what themes dominate negative discourse?
+- **Null (H₁₀):** After controlling for temporal effects (month, day-of-week), the partial slopes of total daily delay on precipitation and snowfall are zero, and the smooth functions of precipitation and temperature are flat.
+- **Alternative (H₁ₐ):** The partial slopes are positive (more precipitation → longer delays; more snowfall → longer delays), and the smooth functions exhibit non-linear structure (e.g., U-shaped temperature, saturating precipitation).
 
-The corresponding hypotheses, with explicit nulls and alternatives, are:
+H₁ is tested with OLS multiple regression for the linear slopes and a Generalized Additive Model (GAM) for the smooth non-linear terms.
 
-- **H₁₀ (null):** The slope of total daily delay on precipitation, controlling for temperature and temporal effects, is zero (β_precip = 0).
-- **H₁ₐ (alternative):** The slope is positive (β_precip > 0), with the relationship potentially non-linear at higher precipitation volumes.
+**H₂ — Predictive.** *A supervised machine-learning model trained on weather and temporal features outperforms a no-information baseline at predicting (a) total daily delay duration and (b) severe delay days.*
 
-- **H₂₀ (null):** A predictive ML model using weather and temporal features performs no better than a no-information baseline (e.g., always predicting "non-severe", or predicting the historical mean) at classifying severe delay days. Specifically, ROC-AUC ≈ 0.5 and out-of-sample R² ≤ 0.
-- **H₂ₐ (alternative):** A predictive ML model achieves ROC-AUC > 0.5 and out-of-sample R² > 0, indicating that weather features carry genuine predictive signal.
+- **Null (H₂₀):** Out-of-sample R² ≤ 0 for the regression task, and out-of-sample ROC-AUC ≤ 0.5 for the classification task. (These are the performance levels of the trivial "predict the mean" and "predict the majority class" baselines, respectively.)
+- **Alternative (H₂ₐ):** Out-of-sample R² > 0 and ROC-AUC > 0.5 on a chronologically held-out test set (2024–2025), indicating that weather features carry genuine predictive signal beyond what could be guessed without them.
 
-- **H₃₀ (null):** The mean VADER sentiment score on Reddit `r/TTC` posts is identical across delay severity quartiles (μ_Q1 = μ_Q4).
-- **H₃ₐ (alternative):** Mean sentiment is more negative on high-severity days than on low-severity days (μ_Q4 < μ_Q1).
+H₂ is tested by training three models (Linear/Logistic Regression, Random Forest, XGBoost) on 2014–2023 data and evaluating their performance on 2024–2025. Each model is assessed in both regression and classification framings to ensure conclusions do not depend on any particular discretization of the target.
 
-H₂ replaces the original midterm's H₂ on "social impact", which the midterm reflection correctly noted lacked a clear testable null. The new H₂ is framed against an explicit no-information baseline.
+## Supporting Analysis: Rider Discourse on Reddit
+
+To complement the quantitative analysis, this report also draws on **rider posts from Reddit's `r/TTC` community** as an *independent qualitative signal*. Sentiment scoring (VADER) and topic modelling (LDA) are applied to a cached sample of posts containing the keyword "delay". This component is **not a formal hypothesis test** — the Reddit sample is small, self-selected, and matched to the delay data only by calendar date — but it provides a useful "ground-truth check" on the regression and ML findings. If the model-flagged severe days correspond to noticeably more negative rider sentiment, that triangulates the quantitative story; if not, it suggests the model is picking up patterns riders themselves don't perceive.
+
+This three-part structure — *explain* (H₁), *predict* (H₂), *triangulate* (Reddit) — replaces the broader six-question framing used in the midterm. The midterm reflection correctly noted that the original framing had too many overlapping questions and lacked clear nulls; the present structure addresses both concerns directly.
 
 The GitHub repository for this project is at <https://github.com/xiran-yin/JSC370-finalproject>.
 
@@ -1274,20 +1273,14 @@ The midterm reflection asked how the Reddit data is matched to the delay data. T
 ---
 
 # Conclusions and Summary
+## Findings, Mapped to the Hypotheses
 
-## Findings, Mapped to the Research Questions
+**H₁ — Explanatory (rejected the null).** OLS finds precipitation (β ≈ 1.2 min/mm, p < 0.001) and snowfall (β ≈ 14 min/cm, p < 0.001) as significant positive predictors of total daily delay. Snowfall's per-unit effect is roughly an order of magnitude larger than rain's. The GAM further reveals that **temperature has a U-shaped effect on delay** — predicted delay is lowest in the 5–20°C range and rises at both extremes — which OLS could not capture and incorrectly reported as non-significant. The precipitation smooth rises sharply through ~10 mm and flattens; the apparent right-edge downturn beyond ~15 mm is an extrapolation artefact in a sparse data region, not evidence of true saturation. Mean total delay also rises monotonically across the three weather categories (Clear: ~137 min → Light: ~146 min → Heavy: ~179 min), and the weekend indicator is strongly negative (β ≈ −32 min, p < 0.001). Earlier midterm language describing a large weekday-vs-weekend "ridership multiplier" was overstated and has been removed throughout this report; the formal interaction test shows the slope difference is modest in magnitude.
 
-**RQ1 (weather → delay association).** Yes, statistically significant. OLS finds precipitation (β ≈ 1.2 min/mm, p < 0.001) and snowfall (β ≈ 14 min/cm, p < 0.001) as significant positive predictors of total daily delay. Snowfall's per-unit effect is roughly an order of magnitude larger than rain's.
+**H₂ — Predictive (rejected the null).** XGBoost is the best performer for both regression (RMSE ≈ `{python} f"{xgb_rmse_reg:.0f}"` min, R² ≈ `{python} f"{xgb_r2_reg:.2f}"` on held-out 2024–2025 data) and classification (ROC-AUC ≈ `{python} f"{xgb_auc:.2f}"`). Random Forest is a close second; linear models lag substantially. All three models clear their respective no-information baselines (R² > 0, AUC > 0.5), allowing the predictive null H₂₀ to be rejected. The top three features in XGBoost's importance ranking — **snowfall, mean temperature, day-of-week** — converge with the inferential findings from H₁: the same predictors that matter for explanation also carry the most weight for prediction. The U-shaped partial-dependence curve for temperature (visible in the interactive viz dashboard) reproduces the GAM smooth from a completely different model class, which is reassuring evidence that the U-shape is a real feature of the data rather than a quirk of the GAM's basis-spline parameterization. A sensitivity check at the 90th-percentile severity cutoff yields a comparable AUC, and the regression framing — which avoids discretization entirely — confirms the conclusions are not artefacts of any particular threshold choice.
 
-**RQ2 (categorical weather → delay).** Mean total delay rises monotonically across the three weather categories (Clear: ~137 min → Light: ~146 min → Heavy: ~179 min), confirming the descriptive picture.
+**Supporting analysis — Reddit (qualitative agreement).** Sentiment is most negative on infrastructure-themed posts (LDA Topic 3) and on high-severity days, consistent with the H₁ and H₂ finding that infrastructure-stressing weather drives the largest delays. This is a qualitative agreement, not a formal test: the Reddit sample is small (n ≈ 100) and VADER is known to misclassify sarcasm, both of which limit the strength of the conclusion. We interpret this as triangulating evidence rather than independent confirmation.
 
-**RQ3 (temporal moderators).** The weekend indicator is strongly negative (β ≈ −32 min, p < 0.001). The weekday-vs-weekend slope difference for precipitation (Figure 3) is modest in magnitude — earlier midterm language describing a large "ridership-multiplier" effect was overstated and has been removed. Month fixed effects are jointly significant.
-
-**RQ4 (non-linearity).** GAM smooths reveal that **temperature has a U-shaped effect on delay** (worst at extremes, best in the 5–20°C range), which OLS could not capture and incorrectly reported as non-significant. Precipitation rises sharply through ~10 mm and flattens; the apparent right-edge downturn beyond ~15 mm is an extrapolation artefact in a sparse data region, not evidence of true saturation.
-
-**RQ5 (predictive ML).** XGBoost is the best performer for both regression (RMSE ≈ `{python} f"{xgb_rmse_reg:.0f}"` min, R² ≈ `{python} f"{xgb_r2_reg:.2f}"` on held-out 2024–2025 data) and classification (ROC-AUC ≈ `{python} f"{xgb_auc:.2f}"`). Random Forest is a close second; linear models lag substantially. The top three features in XGBoost's importance ranking — **snowfall, mean temperature, day-of-week** — converge with the inferential findings. H₂₀ is rejected: weather features carry genuine out-of-sample predictive signal.
-
-**RQ6 (NLP validation).** Reddit sentiment is most negative in Q3 (high but not extreme delays) and on infrastructure-themed posts (Topic 3). The qualitative picture is consistent with the quantitative finding that infrastructure-stressing weather drives the worst delays, though caution is warranted because VADER misclassifies sarcasm.
 
 ## Limitations
 
