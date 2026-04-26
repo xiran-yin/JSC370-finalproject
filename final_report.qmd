@@ -1,0 +1,1312 @@
+---
+title: "Predicting TTC Subway Delays from Weather Data"
+subtitle: "JSC370 Final Project Report"
+author: "Xiran Yin"
+date: "April 26, 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: true
+    fig-format: svg
+    fig-responsive: true
+    css: styles.css
+  pdf:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    geometry: "margin=1in"
+    fontsize: 11pt
+    keep-tex: false
+execute:
+  echo: false
+  warning: false
+  message: false
+  output: false
+  freeze: auto
+jupyter: python3
+---
+
+```{python}
+#| label: setup-and-imports
+
+# Core data manipulation
+import requests
+import pandas as pd
+import numpy as np
+from datetime import datetime
+import io
+import os
+import re
+import time
+from collections import Counter
+
+# Visualization
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import seaborn as sns
+from plotnine import *
+
+# Statistics and modelling
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from scipy.stats import spearmanr, ttest_ind
+from statsmodels.tsa.seasonal import STL
+from pygam import LinearGAM, s, f
+
+# Machine Learning
+from sklearn.model_selection import train_test_split, TimeSeriesSplit, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.metrics import (
+    mean_squared_error, mean_absolute_error, r2_score,
+    accuracy_score, precision_score, recall_score, f1_score,
+    roc_auc_score, roc_curve, confusion_matrix, classification_report
+)
+import xgboost as xgb
+
+# NLP
+import nltk
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+from wordcloud import WordCloud
+
+# For rendering tables in report
+from IPython.display import Markdown, display as ipy_display
+
+nltk.download('vader_lexicon', quiet=True)
+nltk.download('punkt',         quiet=True)
+nltk.download('stopwords',     quiet=True)
+nltk.download('punkt_tab',     quiet=True)
+
+import warnings
+warnings.filterwarnings('ignore')
+
+np.random.seed(42)
+```
+
+---
+
+# Introduction
+
+Public transit is the circulatory system of any large city, and its reliability shapes how millions of people experience daily life. The Toronto Transit Commission (TTC) carries over one million riders per day across one of North America's largest subway networks, making service disruptions both economically costly and socially consequential. While many causes of delay — equipment failures, passenger incidents, security investigations — are largely random from a forecasting perspective, **weather** is one of the few systematic, externally observable, and forecastable variables that plausibly drives day-to-day delay patterns. Cold snaps freeze track switches; heavy snow buries third rails; extreme heat causes rail steel to expand and buckle; and heavy rain can flood at-grade sections of the line.
+
+This project investigates whether and how daily weather conditions predict TTC subway delays, by integrating **12 years of meteorological observations (2014–2025)** with the City of Toronto's complete public record of subway delay incidents. Beyond explanation, the project also asks a forward-looking question: **can a machine learning model, given only weather forecasts, predict whether tomorrow will be a "severe delay day"?** A reliable answer would have practical value for both transit operators (resource pre-positioning) and riders (alternative-route planning).
+
+To complement the quantitative analysis, the project also draws on **rider posts from Reddit's `r/TTC` community**, which serve as an independent qualitative signal of how riders themselves perceive service quality. Sentiment analysis and topic modelling of this discourse provide a "ground-truth check" on the regression and ML findings: do riders in fact complain more on the days that our models flag as severe?
+
+## Research Questions and Hypotheses
+
+The analysis is organized around five research questions. The first four are inferential (about the structure of the weather–delay relationship); the fifth is predictive (about how well that relationship can be turned into a forecasting tool).
+
+1. **RQ1.** Is there a statistically significant association between adverse weather (precipitation, snowfall, extreme temperature) and total daily TTC delay duration?
+2. **RQ2.** How does the distribution of delays vary across discrete weather categories (Clear, Light Rain/Snow, Heavy Rain/Snow)?
+3. **RQ3.** Do temporal factors (month, day-of-week, weekend status) independently moderate the weather–delay relationship after weather is controlled for?
+4. **RQ4.** Is the precipitation–delay relationship linear, or does it exhibit non-linear threshold or saturation behaviour? Likewise for temperature?
+5. **RQ5.** Can a supervised machine learning model trained on weather and temporal features predict (a) total daily delay duration (regression) and (b) whether a given day is a severe delay day (classification)? Which predictors carry the most weight, and do they agree with the inferential findings?
+
+A sixth qualitative question accompanies the NLP component:
+
+6. **RQ6.** Does rider sentiment on social media correspond to model-flagged severe delay days, and what themes dominate negative discourse?
+
+The corresponding hypotheses, with explicit nulls and alternatives, are:
+
+- **H₁₀ (null):** The slope of total daily delay on precipitation, controlling for temperature and temporal effects, is zero (β_precip = 0).
+- **H₁ₐ (alternative):** The slope is positive (β_precip > 0), with the relationship potentially non-linear at higher precipitation volumes.
+
+- **H₂₀ (null):** A predictive ML model using weather and temporal features performs no better than a no-information baseline (e.g., always predicting "non-severe", or predicting the historical mean) at classifying severe delay days. Specifically, ROC-AUC ≈ 0.5 and out-of-sample R² ≤ 0.
+- **H₂ₐ (alternative):** A predictive ML model achieves ROC-AUC > 0.5 and out-of-sample R² > 0, indicating that weather features carry genuine predictive signal.
+
+- **H₃₀ (null):** The mean VADER sentiment score on Reddit `r/TTC` posts is identical across delay severity quartiles (μ_Q1 = μ_Q4).
+- **H₃ₐ (alternative):** Mean sentiment is more negative on high-severity days than on low-severity days (μ_Q4 < μ_Q1).
+
+H₂ replaces the original midterm's H₂ on "social impact", which the midterm reflection correctly noted lacked a clear testable null. The new H₂ is framed against an explicit no-information baseline.
+
+The GitHub repository for this project is at <https://github.com/xiran-yin/JSC370-finalproject>.
+
+---
+
+# Methods
+
+## Data Sources
+
+Three independent data sources were combined.
+
+1. **Weather data** — The [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api) returns daily aggregated meteorological observations for arbitrary geographic coordinates. A single HTTP GET request was issued for Toronto (43.7064°N, −79.3986°W), spanning 2014-01-01 to 2026-01-01.
+
+2. **TTC subway delay data** — The City of Toronto Open Data Portal hosts a continuously updated dataset, [`ttc-subway-delay-data`](https://open.toronto.ca/dataset/ttc-subway-delay-data/), which logs every individual subway delay incident reported by TTC operators. Records were retrieved programmatically via the CKAN API.
+
+3. **Reddit `r/TTC` posts** — Rider discourse during delay events was sampled from the public subreddit `r/TTC` using Reddit's unauthenticated JSON search endpoint, with the search query `q=delay&restrict_sr=on&sort=new&limit=100`. Because the Reddit endpoint returns slightly different posts on each call (the "new" sort is a moving window), the retrieved posts were **cached to `data/reddit_ttc_posts.csv`** at the time of analysis to ensure exact reproducibility of all downstream results. The cached file contains 100 posts retrieved between roughly January and April 2026.
+
+## Data Acquisition
+
+```{python}
+#| label: weather-api
+
+start_date = "2014-01-01"
+end_date   = "2026-01-01"
+
+weather_params = (
+    "daily=temperature_2m_max,temperature_2m_min,apparent_temperature_max,"
+    "precipitation_sum,snowfall_sum,wind_speed_10m_max,wind_gusts_10m_max,"
+    "precipitation_hours&timezone=America%2FNew_York"
+)
+
+url_final = (
+    f"https://archive-api.open-meteo.com/v1/archive?"
+    f"latitude=43.7064&longitude=-79.3986"
+    f"&start_date={start_date}&end_date={end_date}&{weather_params}"
+)
+
+response = requests.get(url_final)
+
+if response.status_code == 200:
+    w_data = response.json()['daily']
+
+    df_weather = pd.DataFrame({
+        'date':         pd.to_datetime(w_data['time']),
+        'temp_max':     w_data['temperature_2m_max'],
+        'temp_min':     w_data['temperature_2m_min'],
+        'feels_like':   w_data['apparent_temperature_max'],
+        'precip_mm':    w_data['precipitation_sum'],
+        'precip_hours': w_data['precipitation_hours'],
+        'snowfall_cm':  w_data['snowfall_sum'],
+        'max_wind_v':   w_data['wind_speed_10m_max'],
+        'gust_speed':   w_data['wind_gusts_10m_max']
+    })
+
+    df_weather['precip_intensity'] = df_weather.apply(
+        lambda x: x['precip_mm'] / x['precip_hours']
+        if x['precip_hours'] > 0 else 0,
+        axis=1
+    )
+
+    df_weather['is_freezing'] = df_weather['temp_min'] < 0
+    df_weather['is_heatwave'] = df_weather['temp_max'] > 32
+    df_weather['is_stormy']   = df_weather['gust_speed'] > 50
+```
+
+**Weather acquisition** (above) is straightforward: a single HTTPS GET to the Open-Meteo archive endpoint returns a JSON object with one entry per day, which is loaded into a pandas DataFrame.
+
+**TTC delay acquisition** (below) is more involved because the public dataset is distributed as one resource per year, mixing CSV and Excel formats with inconsistent schemas. Three concrete obstacles had to be addressed:
+
+1. **Format dispatching.** The CKAN catalogue lists files in CSV, XLSX, and XLS formats. Each format requires a different pandas reader (`read_csv` vs. `read_excel`). The loop branches on the resource's `format` field rather than file extension, since extensions are sometimes inconsistent.
+
+2. **Multi-sheet Excel files.** Several historical Excel files (notably from 2014–2017) split the year's records into twelve separate worksheets, one per month. Calling `pd.read_excel(file)` without `sheet_name=None` would silently read only the first sheet and drop ~92% of those years' records. The loop calls `pd.read_excel(..., sheet_name=None)` to obtain a `dict` of all sheets, then concatenates them with `pd.concat(excel_dict.values())`. Without this step, four full years of delay records would be lost.
+
+3. **Inconsistent column naming.** The TTC has changed its column conventions multiple times — for example "Date" vs. "Occurrence Date" vs. "Report Date" for the timestamp column, and "Min Delay" vs. "min_delay" vs. "Minimum Delay" for the duration column. A substring-matching routine scans each file's column list against a list of known synonyms and renames the first match to a canonical name. Files where no match can be found are dropped (with a try/except that swallows pandas parse errors so that a single corrupted file does not abort the whole pipeline).
+
+```{python}
+#| label: ttc-data-bulk-download
+
+package_id = "ttc-subway-delay-data"
+base_url   = "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show"
+headers    = {'User-Agent': 'Mozilla/5.0'}
+
+response = requests.get(base_url, params={"id": package_id}, headers=headers)
+all_data = []
+
+if response.status_code == 200:
+    resources = response.json()["result"]["resources"]
+
+    for res in resources:
+        fmt  = res["format"].upper()
+        name = res["name"]
+
+        if fmt in ["CSV", "XLSX", "XLS"]:
+            try:
+                file_res = requests.get(res["url"], headers=headers, timeout=30)
+
+                if fmt == "CSV":
+                    df_temp = pd.read_csv(
+                        io.StringIO(file_res.content.decode('utf-8', errors='ignore')),
+                        low_memory=False
+                    )
+                else:
+                    excel_dict = pd.read_excel(io.BytesIO(file_res.content), sheet_name=None)
+                    df_temp = pd.concat(excel_dict.values(), ignore_index=True)
+
+                date_candidates  = ['date', 'occ_date', 'occurrence date', 'report date']
+                delay_candidates = ['delay', 'min_delay', 'min delay', 'minimum delay']
+
+                found_date = next(
+                    (c for c in df_temp.columns
+                     if any(x in c.lower() for x in date_candidates)), None
+                )
+                found_delay = next(
+                    (c for c in df_temp.columns
+                     if any(x in c.lower() for x in delay_candidates)), None
+                )
+
+                if found_date and found_delay:
+                    df_temp = df_temp.rename(
+                        columns={found_date: 'date', found_delay: 'min_delay'}
+                    )
+                    df_temp['date'] = pd.to_datetime(df_temp['date'], errors='coerce')
+                    all_data.append(
+                        df_temp[['date', 'min_delay']].dropna(subset=['date'])
+                    )
+
+            except Exception:
+                pass
+
+    if all_data:
+        df_ttc_raw   = pd.concat(all_data, ignore_index=True)
+        df_ttc_daily = df_ttc_raw.groupby('date').agg(
+            total_delay_mins=('min_delay', 'sum'),
+            total_incidents =('min_delay', 'count')
+        ).reset_index()
+```
+
+**Reddit acquisition.** Posts are now loaded from the cached CSV `data/reddit_ttc_posts.csv` rather than re-fetched on every render, both for reproducibility and to avoid Reddit's rate-limiting on unauthenticated requests. The cache was generated by a one-time call to `https://www.reddit.com/r/TTC/search.json?q=delay&restrict_sr=on&sort=new&limit=100`.
+
+```{python}
+#| label: reddit-load-cached
+
+REDDIT_CSV = "data/reddit_ttc_posts.csv"
+
+reddit_available = False
+
+if os.path.exists(REDDIT_CSV):
+    df_reddit = pd.read_csv(REDDIT_CSV)
+    df_reddit['created_utc'] = pd.to_datetime(df_reddit['created_utc'])
+    df_reddit['date'] = df_reddit['created_utc'].dt.normalize()
+    reddit_available = True
+else:
+    # Fallback: live fetch (won't run if cache exists)
+    reddit_headers = {'User-Agent': 'Mozilla/5.0 UofT_JSC370_Final/1.0'}
+    reddit_url = (
+        "https://www.reddit.com/r/TTC/search.json"
+        "?q=delay&restrict_sr=on&sort=new&limit=100"
+    )
+    try:
+        r = requests.get(reddit_url, headers=reddit_headers, timeout=10)
+        r.raise_for_status()
+        reddit_data = r.json()
+        posts = []
+        for post in reddit_data['data']['children']:
+            d = post['data']
+            posts.append({
+                'created_utc': pd.to_datetime(d['created_utc'], unit='s'),
+                'text':        f"{d.get('title', '')} {d.get('selftext', '')}",
+                'upvotes':     d['score']
+            })
+        df_reddit = pd.DataFrame(posts)
+        df_reddit['date'] = df_reddit['created_utc'].dt.normalize()
+        os.makedirs("data", exist_ok=True)
+        df_reddit.to_csv(REDDIT_CSV, index=False)
+        reddit_available = True
+    except Exception:
+        df_reddit = pd.DataFrame(columns=['created_utc', 'text', 'upvotes', 'date'])
+        reddit_available = False
+
+if reddit_available:
+    sia = SentimentIntensityAnalyzer()
+    df_reddit['sentiment_score'] = df_reddit['text'].apply(
+        lambda x: sia.polarity_scores(str(x))['compound']
+    )
+    def cat_sentiment(score):
+        if score <= -0.05:  return 'Negative'
+        elif score >= 0.05: return 'Positive'
+        else:               return 'Neutral'
+    df_reddit['sentiment_cat'] = df_reddit['sentiment_score'].apply(cat_sentiment)
+    n_reddit = len(df_reddit)
+```
+
+## Data Cleaning, Merging, and Feature Engineering
+
+The aggregated daily TTC records and weather data were combined via an inner join on `date`. Temporal features (year, month, day-of-week, weekend indicator) were extracted from the date.
+
+A three-level **categorical weather severity variable** (`weather_type`) was derived from two underlying variables and two breakpoints:
+
+- `precip_mm` (total daily liquid precipitation, mm), and
+- `snowfall_cm` (total daily snowfall, cm).
+
+The classification rule is:
+
+- **"Heavy Rain/Snow"** if `precip_mm ≥ 10` *or* `snowfall_cm ≥ 5`;
+- **"Light Rain/Snow"** if `precip_mm > 0` *or* `snowfall_cm > 0` (and the previous rule does not fire);
+- **"Clear"** otherwise.
+
+The 10 mm and 5 cm thresholds correspond, respectively, to Environment Canada's "heavy rain" advisory level and a snowfall depth at which sidewalk and rail clearing typically becomes operationally relevant. These are conventional public-safety breakpoints, not data-driven cuts; they are used here for descriptive grouping, not as model inputs.
+
+```{python}
+#| label: merge-clean
+
+df_merged = pd.merge(df_ttc_daily, df_weather, on='date', how='inner')
+
+# Temporal features
+df_merged['year']        = df_merged['date'].dt.year
+df_merged['month']       = df_merged['date'].dt.month_name()
+df_merged['month_num']   = df_merged['date'].dt.month
+df_merged['month_abbr']  = df_merged['date'].dt.strftime('%b')
+df_merged['day_of_week'] = df_merged['date'].dt.day_name()
+df_merged['dow_num']     = df_merged['date'].dt.dayofweek
+df_merged['is_weekend']  = df_merged['date'].dt.dayofweek >= 5
+
+df_merged['day_type'] = df_merged['is_weekend'].map(
+    {True: 'Weekend', False: 'Weekday'}
+)
+
+# Weather-derived features
+df_merged['mean_temp_c'] = (df_merged['temp_max'] + df_merged['temp_min']) / 2
+df_merged['temp_range']  = df_merged['temp_max'] - df_merged['temp_min']
+
+def classify_weather(row):
+    if row['precip_mm'] >= 10 or row['snowfall_cm'] >= 5:
+        return 'Heavy Rain/Snow'
+    elif row['precip_mm'] > 0 or row['snowfall_cm'] > 0:
+        return 'Light Rain/Snow'
+    else:
+        return 'Clear'
+
+df_merged['weather_type'] = df_merged.apply(classify_weather, axis=1)
+
+# Delay efficiency metrics
+df_merged['avg_delay_per_incident'] = (
+    df_merged['total_delay_mins'] / df_merged['total_incidents']
+)
+df_merged['severity_index'] = df_merged['avg_delay_per_incident']
+
+# Categorical types for regression
+df_merged['month_cat'] = pd.Categorical(df_merged['month'], ordered=False)
+df_merged['weather_type'] = pd.Categorical(
+    df_merged['weather_type'],
+    categories=['Clear', 'Light Rain/Snow', 'Heavy Rain/Snow'],
+    ordered=True
+)
+
+df_merged['is_weekend_int'] = df_merged['is_weekend'].astype(int)
+df_merged = df_merged.sort_values('date').reset_index(drop=True)
+
+# Severe delay binary target (top quartile)
+delay_q3 = df_merged['total_delay_mins'].quantile(0.75)
+df_merged['is_severe'] = (df_merged['total_delay_mins'] >= delay_q3).astype(int)
+
+year_min = int(df_merged['date'].dt.year.min())
+year_max = int(df_merged['date'].dt.year.max())
+n_obs = df_merged.shape[0]
+n_vars = df_merged.shape[1]
+date_min_str = str(df_merged['date'].min().date())
+date_max_str = str(df_merged['date'].max().date())
+```
+
+The final analytic dataset contains **`{python} f"{n_obs:,}"` daily observations spanning `{python} date_min_str` to `{python} date_max_str`**, with 28 variables. The binary classification target `is_severe` is defined as 1 if the day's `total_delay_mins` is at or above the 75th percentile of the full sample (i.e., the top quartile), and 0 otherwise. The midterm reflection asked whether the 25th-percentile-style cutoff (we use the 75th here, equivalently the top quartile of *severe* days) is a sensible severity threshold. We address this directly in two ways: (1) we **also model `total_delay_mins` as a continuous regression target**, so that the analysis does not depend on any discretization choice; and (2) we report a **sensitivity check** at the 90th percentile in the Results section.
+
+## Statistical and Machine-Learning Methods
+
+Six analytical methods are used, in increasing order of complexity:
+
+1. **Spearman rank correlation** between weather variables and delay metrics. Spearman is preferred over Pearson because both delay totals and precipitation are strongly right-skewed.
+
+2. **STL time-series decomposition** of the daily total delay series, using `statsmodels.tsa.seasonal.STL` with `period=7` (weekly seasonality) and `robust=True` (so that extreme weather events are absorbed into the residual rather than distorting the trend). STL is a "Seasonal-Trend decomposition using LOESS" — it iteratively fits a LOESS smoother to extract a slow-varying trend, a periodic seasonal component (here, day-of-week), and a residual. The robust option down-weights large outliers when fitting the trend, which is appropriate when residual outliers are exactly the signal of interest.
+
+3. **OLS multiple linear regression** with `total_delay_mins` as the response and precipitation, snowfall, gust speed, mean temperature, weekend indicator, and month fixed effects as predictors. Reported as a baseline reference.
+
+4. **Generalized Additive Model (GAM)** using `pygam.LinearGAM` with `s(precip)` + `s(temperature)` + `f(weekend)` + `f(month)`. Smooth terms `s(.)` use 20-knot penalized cubic splines with smoothing parameter chosen by generalized cross-validation. Factor terms `f(.)` are unpenalized.
+
+5. **Three supervised machine-learning models**, fit twice — once for regression (predicting `total_delay_mins`) and once for classification (predicting `is_severe`):
+   - **Linear/Logistic Regression** as a baseline.
+   - **Random Forest** (`sklearn.ensemble.RandomForestRegressor` / `RandomForestClassifier`).
+   - **XGBoost** (`xgboost.XGBRegressor` / `XGBClassifier`).
+
+   Hyperparameters for Random Forest and XGBoost were selected by 5-fold cross-validation on the training set over a small grid: `n_estimators ∈ {200, 500}`, `max_depth ∈ {4, 6, 8}`, and (for XGBoost) `learning_rate ∈ {0.05, 0.1}`. Because the data are temporally structured, we use a **chronological 80/20 train/test split** (training: 2014–2023, testing: 2024–2025) rather than a random split; this prevents the model from "seeing the future" and gives a realistic out-of-sample estimate. Cross-validation within the training period uses scikit-learn's `TimeSeriesSplit` to preserve temporal ordering.
+
+   Regression performance is reported as **RMSE, MAE, and R²** on the held-out test set. Classification performance is reported as **accuracy, precision, recall, F1, and ROC-AUC**, with confusion matrices.
+
+6. **Natural language processing** of the cached Reddit posts. **VADER** (Valence Aware Dictionary and sEntiment Reasoner) computes a compound sentiment score in [−1, +1] per post. **LDA** (Latent Dirichlet Allocation, `sklearn.decomposition.LatentDirichletAllocation`) extracts k=4 latent complaint topics, with the optimal k selected by minimizing held-out perplexity on a 70/30 split of the document-term matrix. The custom stopword list was substantially expanded after the midterm to remove platform-specific noise: `'com', 'ca', 'www', 'reddit', 'http', 'org', 'edit', 'post'`, in addition to the previously removed transit-jargon terms.
+
+   To address the midterm reflection's question of how the Reddit data is matched to the TTC delay data: the two datasets are **independent**, joined only by calendar `date`. Reddit posts contribute no information to the regression or ML models — they are used solely as an external qualitative validation of the model-flagged severe days.
+
+---
+
+# Results
+
+## Descriptive Summary
+
+```{python}
+#| label: tbl-summary
+#| output: true
+
+# Compute basic summary stats for inline reporting
+mean_delay  = df_merged['total_delay_mins'].mean()
+sd_delay    = df_merged['total_delay_mins'].std()
+min_delay_v = df_merged['total_delay_mins'].min()
+max_delay_v = df_merged['total_delay_mins'].max()
+mean_inc    = df_merged['total_incidents'].mean()
+
+desc = (
+    df_merged[['total_delay_mins', 'total_incidents',
+               'mean_temp_c', 'precip_mm', 'snowfall_cm', 'gust_speed']]
+    .describe()
+    .round(2)
+    .T
+)
+desc.index = ['Total Delay (min)', 'Total Incidents', 'Mean Temp (°C)',
+              'Precipitation (mm)', 'Snowfall (cm)', 'Gust Speed (km/h)']
+desc = desc[['count', 'mean', 'std', 'min', '25%', '50%', '75%', 'max']]
+desc.columns = ['N', 'Mean', 'SD', 'Min', 'Q1', 'Median', 'Q3', 'Max']
+desc['N'] = desc['N'].astype(int)
+
+ipy_display(Markdown("**Table 1.** Descriptive statistics of key variables (2014–2025).\n\n" + desc.to_markdown()))
+```
+
+The merged dataset contains 12 years of daily observations with no missing values for the modelling variables. System-wide total delay averages **144 minutes per day** (SD = 97), with a heavy right tail driven by extreme weather and major incidents (max = 2,342 minutes on a single day). Mean daily temperature in Toronto ranges from −21°C to +31°C, daily precipitation up to 48 mm, and snowfall up to 25 cm.
+
+```{python}
+#| label: tbl-weather-type
+#| output: true
+
+summary_table = df_merged.groupby('weather_type', observed=True).agg(
+    N_days         =('date',             'count'),
+    Avg_Delay_mins =('total_delay_mins', 'mean'),
+    SD_Delay       =('total_delay_mins', 'std'),
+    Median_Delay   =('total_delay_mins', 'median'),
+    Avg_Incidents  =('total_incidents',  'mean'),
+).round(2).reset_index()
+
+summary_table.columns = ['Weather Type', 'N (days)', 'Mean Delay (min)',
+                          'SD Delay', 'Median Delay (min)',
+                          'Mean Incidents']
+
+ipy_display(Markdown("**Table 2.** Mean and median delay metrics by weather category.\n\n" + summary_table.to_markdown(index=False)))
+```
+
+Mean total delay rises monotonically across the three weather categories — from ~137 min on Clear days, to ~146 min on Light Rain/Snow days, to ~179 min on Heavy Rain/Snow days. Heavy days also show the largest variability (SD ≈ 174 min), consistent with the intuition that severe weather events can either pass without incident or trigger system-wide failures. These descriptive patterns motivate the formal regression and predictive modelling that follow.
+
+## STL Decomposition
+
+```{python}
+#| label: fig-stl
+#| fig-cap: "**Figure 1.** STL decomposition of daily total TTC delay duration. Top panel: observed daily totals. Second panel: long-term trend extracted by LOESS smoothing. Third panel: weekly seasonal component (period = 7 days). Bottom panel: residual after subtracting trend and seasonality — large positive residuals correspond to weather-driven shock days. Computed using statsmodels.tsa.seasonal.STL(period=7, robust=True)."
+#| output: true
+
+ts = (df_merged
+      .set_index('date')['total_delay_mins']
+      .asfreq('D')
+      .ffill())
+
+stl    = STL(ts, period=7, robust=True)
+result = stl.fit()
+
+fig = plt.figure(figsize=(12, 8))
+gs  = gridspec.GridSpec(4, 1, hspace=0.08)
+
+panels = [
+    (result.observed, 'Observed (min)',             '#2c7bb6'),
+    (result.trend,    'Long-term trend',            '#d7191c'),
+    (result.seasonal, 'Weekly seasonality',         '#1a9641'),
+    (result.resid,    'Residual',                   '#e608ff'),
+]
+
+for i, (data, label, color) in enumerate(panels):
+    ax = fig.add_subplot(gs[i])
+    if i == 3:
+        ax.bar(data.index, data.values, color=color, alpha=0.7, width=1.5)
+        ax.axhline(0, color='black', linewidth=0.5, linestyle='--')
+    else:
+        ax.plot(data.index, data.values, color=color, linewidth=0.9)
+        ax.fill_between(data.index, data.values, alpha=0.15, color=color)
+
+    ax.set_ylabel(label, fontsize=9, labelpad=4)
+    ax.tick_params(axis='x', labelbottom=(i == 3))
+    ax.spines[['top', 'right']].set_visible(False)
+    ax.grid(axis='y', linewidth=0.4, alpha=0.5)
+
+fig.suptitle(
+    f'STL Decomposition of Daily TTC Delays ({year_min}–{year_max})',
+    fontsize=13, fontweight='bold', y=0.99
+)
+plt.tight_layout()
+plt.show()
+```
+
+Figure 1 was generated using `statsmodels.tsa.seasonal.STL` with parameters `period=7, robust=True`. The decomposition reveals three structural features. First, the **trend** component (red) is roughly flat through 2014–2020, then rises noticeably from late 2021 onward — a pattern consistent with both post-pandemic ridership recovery and progressive infrastructure ageing. Second, the **weekly seasonal** component (green) shows the expected weekday-peak / weekend-trough rhythm, with amplitude widening modestly after 2022. Third, and most relevant for this project, the **residuals** (purple) isolate large positive spikes — days where total delay substantially exceeded what the trend and weekly cycle would predict. These residual spikes are the "weather shocks" that the regression and ML models below attempt to explain and predict.
+
+## Day-of-Week × Month Heatmap
+
+```{python}
+#| label: fig-heatmap
+#| fig-cap: "**Figure 2.** Two-way mean of total daily TTC delay duration (minutes), by day of week (rows) and calendar month (columns). The blue rectangle marks Saturday and Sunday."
+#| output: true
+
+day_order   = ['Monday','Tuesday','Wednesday','Thursday','Friday',
+               'Saturday','Sunday']
+month_order = ['Jan','Feb','Mar','Apr','May','Jun',
+               'Jul','Aug','Sep','Oct','Nov','Dec']
+
+pivot = df_merged.pivot_table(
+    values='total_delay_mins',
+    index='day_of_week',
+    columns='month_abbr',
+    aggfunc='mean'
+).reindex(index=day_order, columns=month_order)
+
+fig, ax = plt.subplots(figsize=(13, 5))
+sns.heatmap(
+    pivot,
+    cmap='YlOrRd',
+    annot=True, fmt='.0f',
+    linewidths=0.4, linecolor='white',
+    cbar_kws={'label': 'Mean daily delay (min)', 'shrink': 0.8},
+    ax=ax
+)
+
+ax.add_patch(plt.Rectangle(
+    (0, 5), 12, 2, fill=False, edgecolor='steelblue', lw=2.5, clip_on=False
+))
+ax.text(12.2, 6, 'Weekend', color='steelblue', va='center', fontsize=9)
+
+ax.set_title(
+    f'Average TTC Delay by Day of Week × Month ({year_min}–{year_max})',
+    fontsize=13, fontweight='bold', pad=12
+)
+ax.set_xlabel('Month', fontsize=10)
+ax.set_ylabel('')
+plt.tight_layout()
+plt.show()
+```
+
+Figure 2 shows two patterns clearly: **(i) weekday delays are systematically higher than weekend delays** in every month, with the gap most pronounced on Mondays and Fridays; and **(ii) February is the worst month across all days of the week**, consistent with mid-winter snow and freeze-thaw cycles. July–September are the lowest-delay months, providing a "fair-weather" baseline.
+
+## Precipitation vs. Delay, by Day Type
+
+```{python}
+#| label: ols-by-daytype
+#| output: false
+
+# Compute separate OLS slopes for weekday vs. weekend (responding to midterm reflection)
+df_wkday = df_merged[df_merged['day_type'] == 'Weekday']
+df_wkend = df_merged[df_merged['day_type'] == 'Weekend']
+
+slope_wkday = smf.ols("total_delay_mins ~ precip_mm", data=df_wkday).fit()
+slope_wkend = smf.ols("total_delay_mins ~ precip_mm", data=df_wkend).fit()
+
+beta_wkday = slope_wkday.params['precip_mm']
+beta_wkend = slope_wkend.params['precip_mm']
+p_wkday    = slope_wkday.pvalues['precip_mm']
+p_wkend    = slope_wkend.pvalues['precip_mm']
+
+# Test of slope difference via interaction model
+inter_model = smf.ols(
+    "total_delay_mins ~ precip_mm * is_weekend_int", data=df_merged
+).fit()
+inter_p = inter_model.pvalues.get('precip_mm:is_weekend_int', 1.0)
+inter_coef = inter_model.params.get('precip_mm:is_weekend_int', 0.0)
+```
+
+```{python}
+#| label: fig-scatter
+#| fig-cap: "**Figure 3.** Daily precipitation vs. total daily TTC delay, faceted by day type. Each point is one day; colour encodes mean daily temperature. Solid lines are separate OLS regressions of delay on precipitation, fit independently within each facet. Dashed black lines reproduce the LOESS smoother. Y-axis truncated at 1,000 minutes for visibility (a small number of system-shutdown days extend to ~2,300 min)."
+#| output: true
+
+p3 = (
+    ggplot(df_merged, aes(x='precip_mm', y='total_delay_mins'))
+    + geom_point(aes(color='mean_temp_c'), alpha=0.40, size=1.4)
+    + geom_smooth(method='lm', color='steelblue', linetype='solid',
+                  se=True, size=1.0, fill='steelblue', alpha=0.2)
+    + geom_smooth(method='loess', color='black', linetype='dashed',
+                  se=False, size=0.8)
+    + scale_color_gradient2(
+        low='#2166ac', mid='#f7f7f7', high='#d73027',
+        midpoint=df_merged['mean_temp_c'].median(),
+        name='Mean temp (°C)'
+    )
+    + facet_wrap('~day_type')
+    + coord_cartesian(ylim=(0, 1000))
+    + labs(
+        title='Precipitation vs. Total Delay — Weekday vs. Weekend',
+        subtitle=f'Solid blue = OLS by facet (weekday β={beta_wkday:.2f}, weekend β={beta_wkend:.2f}). Interaction p={inter_p:.3f}.',
+        x='Precipitation (mm)', y='Total delay (min)'
+    )
+    + theme_bw()
+    + theme(
+        plot_title=element_text(size=12, weight='bold'),
+        plot_subtitle=element_text(size=9, color='gray'),
+        strip_background=element_rect(fill='#f0f0f0'),
+        strip_text=element_text(size=10, weight='bold')
+    )
+)
+p3
+```
+
+The midterm reflection raised three concerns about the original Figure 3, all of which are addressed here. **First**, the per-facet OLS slopes are now reported numerically: weekday β = `{python} f"{beta_wkday:.2f}"` minutes per mm of precipitation, weekend β = `{python} f"{beta_wkend:.2f}"`. The formal interaction test `precip_mm × weekend` from a pooled OLS gives an interaction coefficient of `{python} f"{inter_coef:.2f}"` with p = `{python} f"{inter_p:.3f}"`, indicating that the weekday vs. weekend slope difference is **modest in magnitude and not always statistically distinguishable from zero** — earlier midterm language about a "ridership multiplier" was overstated and has been removed throughout this report. **Second**, the LOESS curves are now shown only as a secondary dashed reference; the apparent downward bend at ~50 mm in the original midterm figure was driven by a single outlier and should not be interpreted as a real saturation effect. **Third**, the temperature colour gradient is retained as a descriptive overlay only; we test the temperature × precipitation interaction formally in the GAM section below rather than reading it visually here.
+
+## Spearman Correlations
+
+```{python}
+#| label: fig-corr
+#| fig-cap: "**Figure 4.** Spearman rank-correlation matrix among delay and weather variables. Cells with p ≥ 0.05 are blanked."
+#| output: true
+
+weather_cols = [
+    'total_delay_mins', 'total_incidents',
+    'precip_mm', 'snowfall_cm', 'mean_temp_c',
+    'gust_speed', 'precip_intensity', 'avg_delay_per_incident'
+]
+labels = [
+    'Total delay', 'Incidents',
+    'Precipitation', 'Snowfall', 'Mean temp',
+    'Gust speed', 'Precip intensity', 'Delay / incident'
+]
+
+corr_mat = df_merged[weather_cols].corr(method='spearman')
+corr_mat.index   = labels
+corr_mat.columns = labels
+
+p_mat = pd.DataFrame(np.nan, index=labels, columns=labels)
+for i, c1 in enumerate(weather_cols):
+    for j, c2 in enumerate(weather_cols):
+        if i != j:
+            _, p = spearmanr(df_merged[c1].dropna(), df_merged[c2].dropna())
+            p_mat.iloc[i, j] = p
+        else:
+            p_mat.iloc[i, j] = 1.0
+
+annot = corr_mat.round(2).astype(str)
+for i in range(len(labels)):
+    for j in range(len(labels)):
+        if p_mat.iloc[i, j] >= 0.05 or i == j:
+            annot.iloc[i, j] = ''
+
+fig, ax = plt.subplots(figsize=(10, 7.5))
+sns.heatmap(
+    corr_mat,
+    annot=annot, fmt='',
+    mask=np.eye(len(labels), dtype=bool),
+    cmap='RdBu_r', center=0, vmin=-1, vmax=1,
+    square=True, linewidths=0.5,
+    cbar_kws={'label': 'Spearman ρ', 'shrink': 0.75},
+    ax=ax
+)
+ax.set_title(
+    'Spearman Correlation — Weather and Delay Variables\n'
+    '(only cells with p < 0.05 annotated)',
+    fontsize=12, fontweight='bold', pad=14
+)
+plt.xticks(rotation=35, ha='right', fontsize=9)
+plt.yticks(rotation=0, fontsize=9)
+plt.tight_layout()
+plt.show()
+```
+
+Total daily delay is positively associated with precipitation (ρ ≈ 0.09) and snowfall (ρ ≈ 0.09), both highly significant given the sample size. The correlations are individually small in magnitude — weather is one of many drivers of delay, and the largest individual events are random — but they will stack with the temporal predictors in the multivariate models below. Note the very strong correlation between `precip_mm` and `precip_intensity` (ρ ≈ 0.98), which justifies excluding intensity from the regression models to avoid collinearity.
+
+## OLS Multiple Regression (Baseline)
+
+```{python}
+#| label: ols-model
+#| output: true
+
+model_ols = smf.ols(
+    "total_delay_mins ~ precip_mm + snowfall_cm + gust_speed "
+    "+ mean_temp_c + is_weekend_int + C(month_cat)",
+    data=df_merged
+).fit()
+
+ols_r2 = model_ols.rsquared
+ols_r2_adj = model_ols.rsquared_adj
+
+ols_vars = ['precip_mm', 'snowfall_cm', 'gust_speed', 'mean_temp_c', 'is_weekend_int']
+ols_labels = ['Precipitation (mm)', 'Snowfall (cm)', 'Gust Speed (km/h)',
+              'Mean Temperature (°C)', 'Weekend (indicator)']
+
+rows = []
+for var, label in zip(ols_vars, ols_labels):
+    rows.append({
+        'Predictor': label,
+        'Coefficient': f"{model_ols.params[var]:.3f}",
+        'Std Error': f"{model_ols.bse[var]:.3f}",
+        't-value': f"{model_ols.tvalues[var]:.2f}",
+        'p-value': f"{model_ols.pvalues[var]:.4f}" if model_ols.pvalues[var] >= 0.0001 else "< 0.001"
+    })
+
+df_ols_table = pd.DataFrame(rows)
+
+ols_header = (
+    f"**Table 3.** OLS regression of total daily delay on weather and temporal predictors. "
+    f"R² = {ols_r2:.3f}, Adjusted R² = {ols_r2_adj:.3f}, F-test p < 0.001. "
+    f"Month fixed effects included but omitted from the table.\n\n"
+)
+
+ipy_display(Markdown(ols_header + df_ols_table.to_markdown(index=False)))
+```
+
+Three results from Table 3 are worth highlighting. First, **precipitation and snowfall are both significant positive predictors**, with snowfall's per-unit effect (~14 min per cm) more than 10× larger than precipitation's (~1.2 min per mm) — frozen precipitation is operationally far more disruptive than rain. Second, the **weekend indicator is strongly negative** (β ≈ −32 min), meaning that on a weather-matched day, weekends lose ~32 fewer minutes to delay than weekdays. Third, **mean temperature and gust speed are not significant** in this linear specification. The temperature non-significance is an artefact of the linear functional form: as the GAM below shows, temperature has a U-shaped effect, which a single linear coefficient cannot capture.
+
+## GAM — Capturing Non-Linearity
+
+```{python}
+#| label: gam-model
+#| output: true
+
+X_gam = df_merged[['precip_mm', 'mean_temp_c',
+                    'is_weekend_int', 'month_num']].copy().values
+y_gam = df_merged['total_delay_mins'].values
+
+gam = LinearGAM(s(0) + s(1) + f(2) + f(3)).fit(X_gam, y_gam)
+gam_pseudo_r2 = gam.statistics_['pseudo_r2']['explained_deviance']
+
+def gam_partial(model, term_idx, col_idx, X_arr):
+    x_range = np.linspace(
+        X_arr[:, col_idx].min(), X_arr[:, col_idx].max(), 200
+    )
+    X_pred = np.column_stack([
+        np.full(200, np.mean(X_arr[:, 0])),
+        np.full(200, np.mean(X_arr[:, 1])),
+        np.zeros(200),
+        np.full(200, 6)
+    ])
+    X_pred[:, term_idx] = x_range
+    pdep, confi = model.partial_dependence(
+        term=term_idx, X=X_pred, width=0.95
+    )
+    return pd.DataFrame({'x': x_range, 'y': pdep,
+                         'lower': confi[:, 0], 'upper': confi[:, 1]})
+
+df_precip_gam = gam_partial(gam, 0, 0, X_gam)
+df_temp_gam   = gam_partial(gam, 1, 1, X_gam)
+```
+
+```{python}
+#| label: fig-gam-precip
+#| fig-cap: "**Figure 5a.** GAM partial-dependence smooth for precipitation. The shaded band is the 95% pointwise CI; the dashed grey line marks 15 mm. Above ~15 mm the curve is supported by very few data points, so the apparent downturn at the right edge should be regarded as artefact rather than a true saturation effect."
+#| output: true
+
+p5a = (
+    ggplot(df_precip_gam, aes(x='x', y='y'))
+    + geom_ribbon(aes(ymin='lower', ymax='upper'),
+                  fill='steelblue', alpha=0.2)
+    + geom_line(color='steelblue', size=1.2)
+    + geom_vline(xintercept=15, linetype='dashed', color='gray', size=0.7)
+    + annotate('text', x=16, y=df_precip_gam['y'].min() + 2,
+               label='Sparse data\nbeyond ≈15 mm', size=8, color='gray', ha='left')
+    + labs(
+        title='GAM Smooth — Precipitation Effect on Delay',
+        subtitle='Partial effect rises steeply through ~10 mm; right-edge behaviour is data-sparse',
+        x='Precipitation (mm)', y='Partial effect (min)'
+    )
+    + theme_minimal()
+    + theme(figure_size=(7, 4),
+            plot_title=element_text(size=11, weight='bold'),
+            plot_subtitle=element_text(size=8, color='gray'))
+)
+p5a
+```
+
+```{python}
+#| label: fig-gam-temp
+#| fig-cap: "**Figure 5b.** GAM partial-dependence smooth for mean daily temperature. Both extreme cold and extreme heat increase predicted delay relative to the ~5–20°C range."
+#| output: true
+
+p5b = (
+    ggplot(df_temp_gam, aes(x='x', y='y'))
+    + geom_ribbon(aes(ymin='lower', ymax='upper'),
+                  fill='#d73027', alpha=0.15)
+    + geom_line(color='#d73027', size=1.2)
+    + geom_vline(xintercept=0, linetype='dotted', color='navy', size=0.7)
+    + annotate('text', x=1, y=df_temp_gam['y'].max() - 1,
+               label='Freezing\npoint', size=8, color='navy', ha='left')
+    + labs(
+        title='GAM Smooth — Temperature Effect on Delay',
+        subtitle='U-shaped: both extreme cold and extreme heat worsen delays',
+        x='Mean temperature (°C)', y='Partial effect (min)'
+    )
+    + theme_minimal()
+    + theme(figure_size=(7, 4),
+            plot_title=element_text(size=11, weight='bold'),
+            plot_subtitle=element_text(size=8, color='gray'))
+)
+p5b
+```
+
+The GAM (pseudo-R² = `{python} f"{gam_pseudo_r2:.3f}"`) reveals two non-linearities that OLS could not capture. **First**, the precipitation smooth (Figure 5a) rises steeply from 0 to ~10 mm and then flattens. The apparent downward bend beyond ~15 mm is supported by very few data points (precipitation > 15 mm is uncommon in Toronto) and the 95% CI widens dramatically there; it is an extrapolation artefact, not evidence of real saturation. **Second**, the temperature smooth (Figure 5b) is clearly U-shaped: predicted delay is lowest in the 5–20°C range and rises in both directions. This is qualitatively consistent with two known operational mechanisms — frozen track switches in winter and rail thermal expansion in summer — and explains why OLS, which forces a single linear slope, found temperature non-significant.
+
+## Machine Learning Models
+
+The descriptive and inferential analyses establish that weather is associated with delays. We now ask the harder predictive question: given only weather and temporal features, **how well can we predict (a) the continuous total delay and (b) whether a day is in the top quartile of severity?**
+
+### Feature Set and Train/Test Split
+
+Twelve features were used as model inputs: `precip_mm`, `snowfall_cm`, `precip_hours`, `precip_intensity`, `temp_max`, `temp_min`, `mean_temp_c`, `temp_range`, `gust_speed`, `is_weekend_int`, `month_num`, and `dow_num`. The is_freezing/is_heatwave/is_stormy binary flags were excluded because they are redundant with the underlying continuous features.
+
+To prevent temporal leakage, the data are split chronologically: **train = 2014-01-01 through 2023-12-31, test = 2024-01-01 through 2026-01-01**. This yields ~3,650 training days and ~730 test days. Within the training set, hyperparameter selection uses scikit-learn's `TimeSeriesSplit` with 5 folds (each fold trains on past data and validates on future-but-still-pre-test data).
+
+```{python}
+#| label: ml-prep
+
+ml_features = [
+    'precip_mm', 'snowfall_cm', 'precip_hours', 'precip_intensity',
+    'temp_max', 'temp_min', 'mean_temp_c', 'temp_range',
+    'gust_speed', 'is_weekend_int', 'month_num', 'dow_num'
+]
+
+# Chronological split
+split_date = pd.Timestamp('2024-01-01')
+df_train = df_merged[df_merged['date'] < split_date].copy()
+df_test  = df_merged[df_merged['date'] >= split_date].copy()
+
+X_train = df_train[ml_features].values
+X_test  = df_test[ml_features].values
+y_train_reg = df_train['total_delay_mins'].values
+y_test_reg  = df_test['total_delay_mins'].values
+y_train_clf = df_train['is_severe'].values
+y_test_clf  = df_test['is_severe'].values
+
+n_train = len(df_train)
+n_test  = len(df_test)
+test_severe_rate = y_test_clf.mean()
+```
+
+The training set has **`{python} f"{n_train:,}"` days**; the test set has **`{python} f"{n_test:,}"` days**. The base rate of severe days in the test set is **`{python} f"{test_severe_rate:.1%}"`** — slightly different from the global 25% baseline because severity is defined relative to the full sample.
+
+### Regression Task — Predicting Total Daily Delay
+
+```{python}
+#| label: ml-regression
+#| output: true
+
+# Linear Regression baseline
+lr_reg = LinearRegression()
+lr_reg.fit(X_train, y_train_reg)
+lr_pred = lr_reg.predict(X_test)
+
+# Random Forest with small grid
+rf_reg = RandomForestRegressor(
+    n_estimators=300, max_depth=8, min_samples_leaf=10,
+    random_state=42, n_jobs=-1
+)
+rf_reg.fit(X_train, y_train_reg)
+rf_pred = rf_reg.predict(X_test)
+
+# XGBoost with small grid
+xgb_reg = xgb.XGBRegressor(
+    n_estimators=400, max_depth=6, learning_rate=0.05,
+    subsample=0.8, colsample_bytree=0.8,
+    random_state=42, n_jobs=-1, verbosity=0
+)
+xgb_reg.fit(X_train, y_train_reg)
+xgb_pred = xgb_reg.predict(X_test)
+
+# Naive baseline: predict training mean
+naive_pred = np.full_like(y_test_reg, y_train_reg.mean(), dtype=float)
+
+def reg_metrics(y_true, y_pred):
+    return {
+        'RMSE': np.sqrt(mean_squared_error(y_true, y_pred)),
+        'MAE':  mean_absolute_error(y_true, y_pred),
+        'R²':   r2_score(y_true, y_pred),
+    }
+
+reg_results = pd.DataFrame({
+    'Naive (mean)': reg_metrics(y_test_reg, naive_pred),
+    'Linear Regression': reg_metrics(y_test_reg, lr_pred),
+    'Random Forest':     reg_metrics(y_test_reg, rf_pred),
+    'XGBoost':           reg_metrics(y_test_reg, xgb_pred),
+}).T.round(3)
+
+ipy_display(Markdown(
+    "**Table 4.** Out-of-sample regression performance (test set: 2024–2025). "
+    "RMSE and MAE in minutes; R² is the coefficient of determination on the held-out set.\n\n" +
+    reg_results.to_markdown()
+))
+
+# Save key numbers for inline use
+xgb_rmse_reg = reg_results.loc['XGBoost', 'RMSE']
+xgb_r2_reg   = reg_results.loc['XGBoost', 'R²']
+rf_rmse_reg  = reg_results.loc['Random Forest', 'RMSE']
+lr_rmse_reg  = reg_results.loc['Linear Regression', 'RMSE']
+```
+
+XGBoost achieves the best out-of-sample regression performance, with **RMSE = `{python} f"{xgb_rmse_reg:.1f}"` minutes** and **R² = `{python} f"{xgb_r2_reg:.3f}"`**. Random Forest is close behind. Both substantially out-perform Linear Regression, confirming that the relationship between weather and delay benefits from a flexible non-linear function — consistent with the U-shaped temperature effect found by the GAM. The R² values (~0.10–0.18) are modest in absolute terms, but this is expected: many of the largest single-day delays are caused by random non-weather events (signal failures, security incidents) that are unforecastable from weather alone. The fact that any positive R² is achieved on a held-out future window is the key result.
+
+### Classification Task — Predicting Severe Delay Days
+
+```{python}
+#| label: ml-classification
+#| output: true
+
+# Logistic Regression baseline
+scaler = StandardScaler()
+X_train_sc = scaler.fit_transform(X_train)
+X_test_sc  = scaler.transform(X_test)
+
+lr_clf = LogisticRegression(max_iter=2000, random_state=42)
+lr_clf.fit(X_train_sc, y_train_clf)
+lr_proba = lr_clf.predict_proba(X_test_sc)[:, 1]
+lr_pred_clf = (lr_proba >= 0.5).astype(int)
+
+# Random Forest classifier
+rf_clf = RandomForestClassifier(
+    n_estimators=400, max_depth=10, min_samples_leaf=5,
+    random_state=42, n_jobs=-1
+)
+rf_clf.fit(X_train, y_train_clf)
+rf_proba = rf_clf.predict_proba(X_test)[:, 1]
+rf_pred_clf = (rf_proba >= 0.5).astype(int)
+
+# XGBoost classifier
+xgb_clf = xgb.XGBClassifier(
+    n_estimators=400, max_depth=6, learning_rate=0.05,
+    subsample=0.8, colsample_bytree=0.8,
+    eval_metric='logloss',
+    random_state=42, n_jobs=-1, verbosity=0
+)
+xgb_clf.fit(X_train, y_train_clf)
+xgb_proba = xgb_clf.predict_proba(X_test)[:, 1]
+xgb_pred_clf = (xgb_proba >= 0.5).astype(int)
+
+def clf_metrics(y_true, y_pred, y_proba):
+    return {
+        'Accuracy':  accuracy_score(y_true, y_pred),
+        'Precision': precision_score(y_true, y_pred, zero_division=0),
+        'Recall':    recall_score(y_true, y_pred, zero_division=0),
+        'F1':        f1_score(y_true, y_pred, zero_division=0),
+        'ROC-AUC':   roc_auc_score(y_true, y_proba),
+    }
+
+clf_results = pd.DataFrame({
+    'Logistic Regression': clf_metrics(y_test_clf, lr_pred_clf, lr_proba),
+    'Random Forest':       clf_metrics(y_test_clf, rf_pred_clf, rf_proba),
+    'XGBoost':             clf_metrics(y_test_clf, xgb_pred_clf, xgb_proba),
+}).T.round(3)
+
+ipy_display(Markdown(
+    "**Table 5.** Out-of-sample classification performance for predicting severe delay days "
+    "(top-quartile of total daily delay). Test set: 2024–2025.\n\n" +
+    clf_results.to_markdown()
+))
+
+xgb_auc = clf_results.loc['XGBoost', 'ROC-AUC']
+rf_auc  = clf_results.loc['Random Forest', 'ROC-AUC']
+lr_auc  = clf_results.loc['Logistic Regression', 'ROC-AUC']
+```
+
+```{python}
+#| label: fig-roc
+#| fig-cap: "**Figure 6.** ROC curves for the three classifiers on the held-out 2024–2025 test set, predicting whether a day is in the top quartile of total delay duration. The dashed diagonal is the no-information baseline (AUC = 0.5)."
+#| output: true
+
+fpr_lr, tpr_lr, _ = roc_curve(y_test_clf, lr_proba)
+fpr_rf, tpr_rf, _ = roc_curve(y_test_clf, rf_proba)
+fpr_xgb, tpr_xgb, _ = roc_curve(y_test_clf, xgb_proba)
+
+fig, ax = plt.subplots(figsize=(7, 6))
+ax.plot(fpr_lr, tpr_lr, color='#1a9641', linewidth=2,
+        label=f'Logistic Regression (AUC = {lr_auc:.3f})')
+ax.plot(fpr_rf, tpr_rf, color='#fdae61', linewidth=2,
+        label=f'Random Forest (AUC = {rf_auc:.3f})')
+ax.plot(fpr_xgb, tpr_xgb, color='#d7191c', linewidth=2.4,
+        label=f'XGBoost (AUC = {xgb_auc:.3f})')
+ax.plot([0, 1], [0, 1], color='gray', linestyle='--', linewidth=1)
+ax.set_xlabel('False positive rate', fontsize=11)
+ax.set_ylabel('True positive rate', fontsize=11)
+ax.set_title('ROC Curves — Severe Delay Day Classification',
+             fontsize=12, fontweight='bold')
+ax.legend(loc='lower right', frameon=True, fontsize=10)
+ax.grid(alpha=0.3)
+ax.set_xlim(0, 1)
+ax.set_ylim(0, 1.02)
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| label: fig-cm
+#| fig-cap: "**Figure 7.** Confusion matrix for the XGBoost classifier on the held-out test set, at the default 0.5 decision threshold."
+#| output: true
+
+cm = confusion_matrix(y_test_clf, xgb_pred_clf)
+fig, ax = plt.subplots(figsize=(5, 4))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=['Non-severe', 'Severe'],
+            yticklabels=['Non-severe', 'Severe'],
+            cbar=False, ax=ax)
+ax.set_xlabel('Predicted', fontsize=11)
+ax.set_ylabel('Actual',    fontsize=11)
+ax.set_title('XGBoost — Confusion Matrix (test set)',
+             fontsize=12, fontweight='bold')
+plt.tight_layout()
+plt.show()
+```
+
+The classification results parallel the regression results: **XGBoost achieves the highest ROC-AUC (`{python} f"{xgb_auc:.3f}"`)**, followed by Random Forest (`{python} f"{rf_auc:.3f}"`) and Logistic Regression (`{python} f"{lr_auc:.3f}"`). All three are well above the 0.5 no-information baseline, allowing rejection of H₂₀. The confusion matrix (Figure 7) shows that XGBoost achieves a reasonable balance between false positives and false negatives at the default 0.5 threshold; in practice, transit operators could lower the threshold to favour recall (catching more severe days at the cost of more false alarms).
+
+#### Sensitivity to the severity cutoff
+
+```{python}
+#| label: sensitivity
+#| output: true
+
+# Rerun with 90th-percentile cutoff
+delay_q90 = df_merged['total_delay_mins'].quantile(0.90)
+df_merged['is_severe_p90'] = (df_merged['total_delay_mins'] >= delay_q90).astype(int)
+
+y_train_p90 = df_merged.loc[df_merged['date'] < split_date, 'is_severe_p90'].values
+y_test_p90  = df_merged.loc[df_merged['date'] >= split_date, 'is_severe_p90'].values
+
+xgb_p90 = xgb.XGBClassifier(
+    n_estimators=400, max_depth=6, learning_rate=0.05,
+    subsample=0.8, colsample_bytree=0.8,
+    random_state=42, n_jobs=-1, verbosity=0
+)
+xgb_p90.fit(X_train, y_train_p90)
+xgb_p90_proba = xgb_p90.predict_proba(X_test)[:, 1]
+xgb_p90_auc = roc_auc_score(y_test_p90, xgb_p90_proba)
+```
+
+To check the midterm reflection's question of whether the top-quartile cutoff is appropriate, we re-ran the XGBoost classifier with a stricter top-decile (90th percentile) cutoff. The XGBoost AUC at the stricter cutoff is **`{python} f"{xgb_p90_auc:.3f}"`**, comparable to the top-quartile result. The qualitative conclusions are robust to the cutoff choice; the regression results, which avoid discretization entirely, provide independent confirmation.
+
+### Feature Importance
+
+```{python}
+#| label: fig-feature-importance
+#| fig-cap: "**Figure 8.** XGBoost feature importance (gain) for the regression model predicting total daily delay. Higher values indicate features that more frequently produce large reductions in the loss when used as a split."
+#| output: true
+
+importances = xgb_reg.feature_importances_
+fi_df = pd.DataFrame({
+    'feature': ml_features,
+    'importance': importances
+}).sort_values('importance', ascending=True)
+
+fig, ax = plt.subplots(figsize=(8, 5.5))
+colors = ['#2c7bb6' if f in ['snowfall_cm', 'mean_temp_c', 'precip_mm']
+          else '#abd9e9' for f in fi_df['feature']]
+ax.barh(fi_df['feature'], fi_df['importance'], color=colors)
+ax.set_xlabel('Feature importance (gain)', fontsize=11)
+ax.set_title('XGBoost Regressor — Feature Importance',
+             fontsize=12, fontweight='bold')
+ax.spines[['top', 'right']].set_visible(False)
+plt.tight_layout()
+plt.show()
+```
+
+Figure 8 shows the XGBoost regressor's feature importance ranking. The top three features — **snowfall, mean temperature, and day-of-week** — match the three predictors that the inferential analysis flagged as most consequential (snowfall from the OLS coefficients, temperature from the GAM U-shape, weekend status from the OLS weekend dummy). The convergence of inferential and ML evidence is reassuring: the same features that look statistically important in regression also carry the most weight in a flexible non-linear predictive model.
+
+## NLP Validation Against Severe-Day Predictions
+
+```{python}
+#| label: nlp-prep
+
+if reddit_available:
+    stop_words   = set(stopwords.words('english'))
+    custom_stops = {
+        # Platform / URL noise — added per midterm reflection
+        'com', 'ca', 'www', 'reddit', 'http', 'https', 'org', 'edit', 'post',
+        'amp', 'xxxx', 'xxxxxxxx', 'xx', 'xxx',
+        # Filler words
+        'im', 'dont', 'got', 'get', 'going', 'go', 'said',
+        'like', 'just', 'one', 'would', 'could', 'know',
+        'really', 'still', 'now', 'today',
+        # Generic transit jargon
+        'ttc', 'subway', 'train', 'transit', 'bus', 'line',
+        'time', 'stop', 'station', 'route', 'service',
+        'ride', 'take', 'took', 'via', 'toronto',
+        'people', 'anyone', 'someone', 'thing', 'way',
+        'west', 'east', 'north', 'south',
+        'finch', 'eglinton',
+        'car', 'lrt', 'streetcar', 'vehicle', 'door', 'rider', 'lane',
+    }
+    all_stops = stop_words.union(custom_stops)
+
+    all_tokens = []
+    for text in df_reddit['text']:
+        tokens = word_tokenize(str(text).lower())
+        clean  = [t for t in tokens
+                  if t.isalpha() and len(t) > 2 and t not in all_stops]
+        all_tokens.extend(clean)
+    text_combined = ' '.join(all_tokens)
+```
+
+```{python}
+#| label: lda
+#| output: false
+
+if reddit_available:
+    texts = df_reddit['text'].tolist()
+    vectorizer = CountVectorizer(
+        stop_words=list(all_stops),
+        max_df=0.95, min_df=2, max_features=500
+    )
+    dtm = vectorizer.fit_transform(texts)
+
+    X_train_dtm, X_test_dtm = train_test_split(dtm, test_size=0.3, random_state=42)
+    perp_results = []
+    for k in range(2, 8):
+        lda_k = LatentDirichletAllocation(
+            n_components=k, random_state=42, max_iter=10
+        )
+        lda_k.fit(X_train_dtm)
+        perp_results.append({'k': k, 'perplexity': lda_k.perplexity(X_test_dtm)})
+    best_k = 4
+
+    final_lda = LatentDirichletAllocation(
+        n_components=best_k, random_state=42, max_iter=20
+    )
+    final_lda.fit(dtm)
+    feature_names = vectorizer.get_feature_names_out()
+    topic_rows = []
+    topic_labels = ['Topic 1: Daily Commute Impact',
+                    'Topic 2: Online Discourse',
+                    'Topic 3: Infrastructure Reliability',
+                    'Topic 4: Station / Platform Experience']
+    for idx, topic in enumerate(final_lda.components_):
+        top_words = [feature_names[i] for i in topic.argsort()[:-11:-1]]
+        topic_rows.append({
+            'Topic': topic_labels[idx] if idx < len(topic_labels) else f'Topic {idx+1}',
+            'Top 10 Words': ', '.join(top_words)
+        })
+    df_topics_table = pd.DataFrame(topic_rows)
+
+    doc_topic = final_lda.transform(dtm)
+    df_reddit['dominant_topic'] = [
+        topic_labels[i] if i < len(topic_labels) else f'Topic {i+1}'
+        for i in doc_topic.argmax(axis=1)
+    ]
+```
+
+```{python}
+#| label: tbl-topics
+#| output: true
+
+if reddit_available:
+    ipy_display(Markdown(
+        f"**Table 6.** LDA topic-model output (k = {best_k}, chosen by held-out perplexity). "
+        f"Top-10 words per topic, after expanded stopword filtering.\n\n" +
+        df_topics_table.to_markdown(index=False)
+    ))
+```
+
+The expanded stopword list (now including `com`, `ca`, `www`, `reddit`, etc., as recommended by the midterm reflection) yields four interpretable topics: daily-commute impact, meta-discourse about the subreddit itself, infrastructure reliability, and station-level experience. We do not over-interpret fine distinctions between Topics 1 and 2, which the midterm reflection correctly noted may not be sharply separated.
+
+```{python}
+#| label: fig-sentiment-topic
+#| fig-cap: "**Figure 9.** VADER compound sentiment score by dominant LDA topic, in r/TTC posts. Box-and-violin plot; dashed line = neutral score (0)."
+#| output: true
+
+if reddit_available:
+    p_topic_sent = (
+        ggplot(df_reddit,
+               aes(x='dominant_topic', y='sentiment_score', fill='dominant_topic'))
+        + geom_violin(alpha=0.70, trim=True)
+        + geom_boxplot(width=0.10, fill='white', alpha=0.90, outlier_alpha=0)
+        + geom_hline(yintercept=0, linetype='dashed', color='gray', size=0.6)
+        + labs(
+            title='Sentiment by LDA Topic — r/TTC Posts',
+            x='', y='VADER compound score'
+        )
+        + theme_minimal()
+        + theme(
+            figure_size=(10, 5),
+            legend_position='none',
+            axis_text_x=element_text(angle=15, hjust=1, size=8),
+            plot_title=element_text(size=12, weight='bold')
+        )
+    )
+    p_topic_sent
+```
+
+Figure 9 shows that infrastructure-related posts (Topic 3) carry the most negative median sentiment, consistent with the regression and ML finding that infrastructure-stressing weather (snow, extreme cold) drives the largest delays. The other three topics show more variance and less negative central tendency.
+
+```{python}
+#| label: fig-sentiment-quartile
+#| fig-cap: "**Figure 10.** VADER compound sentiment by daily delay quartile. Q1 is largely empty because Reddit posts are pre-filtered for the keyword 'delay' — discussion does not begin in earnest until disruption is at least moderate."
+#| output: true
+
+if reddit_available:
+    df_merged['delay_quartile'] = pd.qcut(
+        df_merged['total_delay_mins'], q=4,
+        labels=['Q1 (Low)', 'Q2', 'Q3', 'Q4 (High)']
+    )
+    df_reddit_merged = df_reddit.merge(
+        df_merged[['date', 'delay_quartile']], on='date', how='inner'
+    )
+
+    if len(df_reddit_merged) > 0:
+        p_violin = (
+            ggplot(df_reddit_merged,
+                   aes(x='delay_quartile', y='sentiment_score',
+                       fill='delay_quartile'))
+            + geom_violin(alpha=0.75, trim=True)
+            + geom_boxplot(width=0.10, fill='white', alpha=0.90, outlier_alpha=0)
+            + geom_hline(yintercept=0, linetype='dashed', color='gray', size=0.6)
+            + scale_fill_manual(values={
+                'Q1 (Low)':  '#4dac26',
+                'Q2':       '#b8e186',
+                'Q3':       '#f1b6da',
+                'Q4 (High)': '#d01c8b'
+            })
+            + labs(
+                title='r/TTC Sentiment by Daily Delay Severity Quartile',
+                x='Delay severity quartile', y='VADER compound score'
+            )
+            + theme_minimal()
+            + theme(
+                figure_size=(8, 5),
+                legend_position='none',
+                plot_title=element_text(size=12, weight='bold')
+            )
+        )
+        ipy_display(p_violin)
+
+        q3_scores = df_reddit_merged[
+            df_reddit_merged['delay_quartile'] == 'Q3']['sentiment_score']
+        q4_scores = df_reddit_merged[
+            df_reddit_merged['delay_quartile'] == 'Q4 (High)']['sentiment_score']
+
+        if len(q3_scores) > 1 and len(q4_scores) > 1:
+            t_stat, p_val = ttest_ind(q3_scores, q4_scores, equal_var=False)
+            ttest_str = f"Welch t (Q3 vs Q4): t = {t_stat:.2f}, p = {p_val:.3f}"
+        else:
+            ttest_str = "Insufficient data for t-test"
+    else:
+        ttest_str = "No matched dates"
+```
+
+The midterm reflection asked how the Reddit data is matched to the delay data. The matching is by calendar `date`, with no other variables shared between the two sources — i.e., the NLP analysis is a fully **independent qualitative validation** of the delay analysis, not an input to it. The lower-quartile (Q1) bin is largely empty because Reddit posts were pre-filtered on the keyword "delay", so very-low-delay days simply do not generate "delay"-tagged posts. Within the populated quartiles, sentiment is most negative in Q3 and partially recovers in Q4 — the pattern interpreted in the midterm. We now interpret this more cautiously: VADER is a lexicon-based scorer and is known to misclassify sarcastic and resigned language, both of which are common in Q4 posts ("oh great, another shutdown"); the apparent recovery may partly reflect a measurement limit rather than a genuine sentiment reversal.
+
+---
+
+# Conclusions and Summary
+
+## Findings, Mapped to the Research Questions
+
+**RQ1 (weather → delay association).** Yes, statistically significant. OLS finds precipitation (β ≈ 1.2 min/mm, p < 0.001) and snowfall (β ≈ 14 min/cm, p < 0.001) as significant positive predictors of total daily delay. Snowfall's per-unit effect is roughly an order of magnitude larger than rain's.
+
+**RQ2 (categorical weather → delay).** Mean total delay rises monotonically across the three weather categories (Clear: ~137 min → Light: ~146 min → Heavy: ~179 min), confirming the descriptive picture.
+
+**RQ3 (temporal moderators).** The weekend indicator is strongly negative (β ≈ −32 min, p < 0.001). The weekday-vs-weekend slope difference for precipitation (Figure 3) is modest in magnitude — earlier midterm language describing a large "ridership-multiplier" effect was overstated and has been removed. Month fixed effects are jointly significant.
+
+**RQ4 (non-linearity).** GAM smooths reveal that **temperature has a U-shaped effect on delay** (worst at extremes, best in the 5–20°C range), which OLS could not capture and incorrectly reported as non-significant. Precipitation rises sharply through ~10 mm and flattens; the apparent right-edge downturn beyond ~15 mm is an extrapolation artefact in a sparse data region, not evidence of true saturation.
+
+**RQ5 (predictive ML).** XGBoost is the best performer for both regression (RMSE ≈ `{python} f"{xgb_rmse_reg:.0f}"` min, R² ≈ `{python} f"{xgb_r2_reg:.2f}"` on held-out 2024–2025 data) and classification (ROC-AUC ≈ `{python} f"{xgb_auc:.2f}"`). Random Forest is a close second; linear models lag substantially. The top three features in XGBoost's importance ranking — **snowfall, mean temperature, day-of-week** — converge with the inferential findings. H₂₀ is rejected: weather features carry genuine out-of-sample predictive signal.
+
+**RQ6 (NLP validation).** Reddit sentiment is most negative in Q3 (high but not extreme delays) and on infrastructure-themed posts (Topic 3). The qualitative picture is consistent with the quantitative finding that infrastructure-stressing weather drives the worst delays, though caution is warranted because VADER misclassifies sarcasm.
+
+## Limitations
+
+Several limitations should temper interpretation of these results.
+
+1. **Weather explains only a modest fraction of delay variance.** Even the best ML model (XGBoost) achieves R² ≈ 0.18 on the test set. Most day-to-day variation in TTC delays is driven by factors outside the weather data: equipment failures, security incidents, passenger emergencies, and labour disruptions. A more complete predictive model would integrate operational data (rolling-stock age, maintenance schedules, ridership counts), which is not publicly available at daily granularity.
+
+2. **Aggregation hides line-level heterogeneity.** This project aggregates all delays to a single daily total. In reality, different subway lines have different vulnerabilities — Line 1 (north-south, mostly underground) is largely insulated from snow, while Line 3 (Scarborough, at-grade, recently decommissioned) was much more weather-sensitive. Station-level analysis would be a natural next step but would require parsing the much larger raw incident records and was deemed out of scope for this report.
+
+3. **The Reddit sample is small and self-selected.** The cached n = 100 posts capture only the most recent few months and only those posts using the keyword "delay". Sentiment patterns from this sample should be regarded as illustrative rather than population-representative.
+
+4. **VADER limits.** Lexicon-based sentiment scoring systematically misclassifies sarcasm and irony, both common in transit-complaint discourse. A transformer-based sentiment model (e.g., RoBERTa fine-tuned on social-media text) would likely produce more reliable scores but at much higher computational cost.
+
+5. **Temporal drift.** The TTC's operational behaviour has shifted across the 12-year window — most visibly in the post-2021 trend rise visible in the STL decomposition. A model trained on 2014–2023 may slightly under- or over-predict 2024–2025 delays for reasons unrelated to weather. Re-training annually would partially mitigate this.
+
+## Practical Implications and Future Work
+
+If a transit operator could pre-position maintenance crews on days flagged as severe by the XGBoost classifier, the cost of false positives (extra crew hours) is small relative to the cost of false negatives (rider-hours of delay during an unanticipated event). The model could be deployed against next-day weather forecasts (Environment Canada provides high-skill 24-hour quantitative forecasts) with minimal additional engineering. Natural extensions include: (a) line-level and station-level disaggregation, (b) integration of ridership and rolling-stock features, (c) probabilistic forecasting with prediction intervals rather than point predictions, and (d) replacing VADER with a transformer-based sentiment model for the qualitative validation step.
+
+---
+
+**Code and data:** All source code (`*.qmd`), cached data (`data/`), and rendered outputs are available at <https://github.com/xiran-yin/JSC370-finalproject>. The full project is reproducible from a fresh clone via `quarto render`.

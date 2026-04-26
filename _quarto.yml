@@ -1,0 +1,46 @@
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "Weather & TTC Delays — JSC370 Final Project"
+  description: "Predicting Toronto subway delays from weather data using machine learning."
+  navbar:
+    background: primary
+    search: false
+    left:
+      - href: index.qmd
+        text: Home
+      - href: final_report.qmd
+        text: Full Report
+      - href: viz.qmd
+        text: Interactive Visualizations
+      - text: Download PDF
+        href: final_report.pdf
+      - text: GitHub
+        href: https://github.com/xiran-yin/JSC370-finalproject
+  page-footer:
+    left: "JSC370 Final Project — Xiran Yin (2026)"
+    right: "Built with Quarto"
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    number-sections: false
+    fig-responsive: true
+    fig-format: svg
+    css: styles.css
+    code-fold: true
+    code-tools: true
+    embed-resources: false
+
+execute:
+  echo: false
+  warning: false
+  message: false
+  output: false
+  freeze: auto
+
+jupyter: python3

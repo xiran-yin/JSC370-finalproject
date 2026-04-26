@@ -1,0 +1,29 @@
+# Quarto build artifacts
+/.quarto/
+*_files/
+*.html.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# Jupyter cache
+.jupyter_cache/
+
+# Freeze (Quarto cache)
+# (we keep _freeze/ committed so the site can be re-rendered without re-running heavy code)
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Local environment
+.env

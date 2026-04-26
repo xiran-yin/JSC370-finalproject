@@ -1,0 +1,507 @@
+---
+title: "Interactive Visualizations"
+subtitle: "Homework 5 — Three interactive Plotly figures"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    page-layout: full
+execute:
+  echo: false
+  warning: false
+  message: false
+  output: false
+  freeze: auto
+jupyter: python3
+---
+
+```{python}
+#| label: setup
+
+import pandas as pd
+import numpy as np
+import requests
+import io
+import os
+
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+from sklearn.ensemble import RandomForestRegressor
+import xgboost as xgb
+from sklearn.inspection import partial_dependence
+
+import warnings
+warnings.filterwarnings('ignore')
+
+np.random.seed(42)
+```
+
+```{python}
+#| label: load-data
+
+# --- Weather ---
+weather_params = (
+    "daily=temperature_2m_max,temperature_2m_min,apparent_temperature_max,"
+    "precipitation_sum,snowfall_sum,wind_speed_10m_max,wind_gusts_10m_max,"
+    "precipitation_hours&timezone=America%2FNew_York"
+)
+url = (
+    f"https://archive-api.open-meteo.com/v1/archive?"
+    f"latitude=43.7064&longitude=-79.3986"
+    f"&start_date=2014-01-01&end_date=2026-01-01&{weather_params}"
+)
+w_data = requests.get(url).json()['daily']
+df_weather = pd.DataFrame({
+    'date':         pd.to_datetime(w_data['time']),
+    'temp_max':     w_data['temperature_2m_max'],
+    'temp_min':     w_data['temperature_2m_min'],
+    'precip_mm':    w_data['precipitation_sum'],
+    'precip_hours': w_data['precipitation_hours'],
+    'snowfall_cm':  w_data['snowfall_sum'],
+    'gust_speed':   w_data['wind_gusts_10m_max']
+})
+df_weather['precip_intensity'] = df_weather.apply(
+    lambda x: x['precip_mm'] / x['precip_hours'] if x['precip_hours'] > 0 else 0,
+    axis=1
+)
+df_weather['mean_temp_c'] = (df_weather['temp_max'] + df_weather['temp_min']) / 2
+df_weather['temp_range']  = df_weather['temp_max'] - df_weather['temp_min']
+
+# --- TTC ---
+package_id = "ttc-subway-delay-data"
+base_url = "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show"
+headers = {'User-Agent': 'Mozilla/5.0'}
+resp = requests.get(base_url, params={"id": package_id}, headers=headers)
+all_data = []
+for res in resp.json()["result"]["resources"]:
+    fmt = res["format"].upper()
+    if fmt in ["CSV", "XLSX", "XLS"]:
+        try:
+            file_res = requests.get(res["url"], headers=headers, timeout=30)
+            if fmt == "CSV":
+                df_temp = pd.read_csv(
+                    io.StringIO(file_res.content.decode('utf-8', errors='ignore')),
+                    low_memory=False
+                )
+            else:
+                excel_dict = pd.read_excel(io.BytesIO(file_res.content), sheet_name=None)
+                df_temp = pd.concat(excel_dict.values(), ignore_index=True)
+
+            date_cands = ['date', 'occ_date', 'occurrence date', 'report date']
+            del_cands  = ['delay', 'min_delay', 'min delay']
+            fd = next((c for c in df_temp.columns if any(x in c.lower() for x in date_cands)), None)
+            fdel = next((c for c in df_temp.columns if any(x in c.lower() for x in del_cands)), None)
+            if fd and fdel:
+                df_temp = df_temp.rename(columns={fd: 'date', fdel: 'min_delay'})
+                df_temp['date'] = pd.to_datetime(df_temp['date'], errors='coerce')
+                # Capture station/line if present
+                stat_col = next((c for c in df_temp.columns if 'station' in c.lower()), None)
+                line_col = next((c for c in df_temp.columns if c.lower() in ['line', 'subway line']), None)
+                cols = ['date', 'min_delay']
+                if stat_col:
+                    df_temp = df_temp.rename(columns={stat_col: 'station'})
+                    cols.append('station')
+                if line_col:
+                    df_temp = df_temp.rename(columns={line_col: 'line'})
+                    cols.append('line')
+                all_data.append(df_temp[cols].dropna(subset=['date']))
+        except Exception:
+            pass
+
+df_ttc_raw = pd.concat(all_data, ignore_index=True)
+df_ttc_daily = df_ttc_raw.groupby('date').agg(
+    total_delay_mins=('min_delay', 'sum'),
+    total_incidents =('min_delay', 'count')
+).reset_index()
+
+df_merged = pd.merge(df_ttc_daily, df_weather, on='date', how='inner')
+df_merged['year']        = df_merged['date'].dt.year
+df_merged['month_num']   = df_merged['date'].dt.month
+df_merged['month_abbr']  = df_merged['date'].dt.strftime('%b')
+df_merged['day_of_week'] = df_merged['date'].dt.day_name()
+df_merged['dow_num']     = df_merged['date'].dt.dayofweek
+df_merged['is_weekend']  = (df_merged['dow_num'] >= 5).astype(int)
+
+def classify_weather(row):
+    if row['precip_mm'] >= 10 or row['snowfall_cm'] >= 5:
+        return 'Heavy Rain/Snow'
+    elif row['precip_mm'] > 0 or row['snowfall_cm'] > 0:
+        return 'Light Rain/Snow'
+    else:
+        return 'Clear'
+df_merged['weather_type'] = df_merged.apply(classify_weather, axis=1)
+
+# Top-10 stations
+df_station = df_ttc_raw.dropna(subset=['min_delay'])
+if 'station' in df_station.columns:
+    station_summary = (
+        df_station.groupby('station')
+        .agg(total_delay=('min_delay', 'sum'),
+             n_incidents=('min_delay', 'count'),
+             avg_delay=('min_delay', 'mean'))
+        .reset_index()
+        .sort_values('total_delay', ascending=False)
+        .head(15)
+    )
+    station_summary['station_clean'] = (
+        station_summary['station'].astype(str)
+        .str.replace('STATION', '', regex=False)
+        .str.replace('STN', '', regex=False)
+        .str.strip()
+        .str.title()
+    )
+else:
+    station_summary = pd.DataFrame()
+```
+
+# Overview
+
+This page presents three interactive Plotly visualizations built on the same dataset used in the [main report](final_report.qmd). All three figures are **fully interactive** — try hovering over points, clicking legend entries to toggle series, and using the box/lasso select tools to drill into specific date ranges.
+
+The three figures correspond to the three pillars of the analysis:
+
+1. **Figure 1** — a time-series explorer of daily delays with a weather-severity overlay,
+2. **Figure 2** — a heatmap of mean delay by month and day-of-week with click-through summaries,
+3. **Figure 3** — a model-output dashboard combining XGBoost feature importance with a partial-dependence curve.
+
+A bonus fourth figure shows aggregated **station-level delay totals**, addressing the midterm plan to incorporate station-level information.
+
+---
+
+# Figure 1 — Interactive Time Series of Daily Delays
+
+```{python}
+#| label: fig1-timeseries
+#| output: true
+
+# Compute weather severity for color
+df_merged['weather_severity'] = df_merged['weather_type'].map({
+    'Clear': 0, 'Light Rain/Snow': 1, 'Heavy Rain/Snow': 2
+})
+
+color_map = {
+    'Clear': '#3182bd',
+    'Light Rain/Snow': '#fdae61',
+    'Heavy Rain/Snow': '#d7191c'
+}
+
+fig1 = go.Figure()
+
+for wt, col in color_map.items():
+    sub = df_merged[df_merged['weather_type'] == wt]
+    fig1.add_trace(go.Scatter(
+        x=sub['date'], y=sub['total_delay_mins'],
+        mode='markers',
+        name=wt,
+        marker=dict(size=4, color=col, opacity=0.55),
+        hovertemplate=(
+            '<b>%{x|%Y-%m-%d}</b><br>'
+            'Total delay: %{y:.0f} min<br>'
+            'Precipitation: %{customdata[0]:.1f} mm<br>'
+            'Snowfall: %{customdata[1]:.1f} cm<br>'
+            'Mean temp: %{customdata[2]:.1f}°C<br>'
+            'Weather: ' + wt +
+            '<extra></extra>'
+        ),
+        customdata=sub[['precip_mm', 'snowfall_cm', 'mean_temp_c']].values
+    ))
+
+# 30-day rolling mean overlay
+df_merged_sorted = df_merged.sort_values('date')
+rolling = df_merged_sorted['total_delay_mins'].rolling(30, min_periods=10).mean()
+fig1.add_trace(go.Scatter(
+    x=df_merged_sorted['date'], y=rolling,
+    mode='lines',
+    name='30-day rolling mean',
+    line=dict(color='black', width=2),
+    hovertemplate='30-day mean: %{y:.0f} min<extra></extra>'
+))
+
+fig1.update_layout(
+    title=dict(
+        text='Daily Total TTC Delay by Weather Severity (2014–2025)',
+        font=dict(size=16, color='#1a3a5c')
+    ),
+    xaxis=dict(
+        title='Date',
+        rangeselector=dict(
+            buttons=[
+                dict(count=6, label='6m', step='month', stepmode='backward'),
+                dict(count=1, label='1y', step='year',  stepmode='backward'),
+                dict(count=3, label='3y', step='year',  stepmode='backward'),
+                dict(step='all', label='All')
+            ],
+            bgcolor='#f0f0f0'
+        ),
+        rangeslider=dict(visible=True, thickness=0.05),
+        type='date'
+    ),
+    yaxis=dict(title='Total daily delay (min)'),
+    hovermode='closest',
+    legend=dict(
+        title='Weather type',
+        orientation='h',
+        yanchor='bottom', y=1.02,
+        xanchor='right', x=1
+    ),
+    template='plotly_white',
+    height=560,
+    margin=dict(l=60, r=30, t=80, b=60)
+)
+fig1.show()
+```
+
+**Caption.** Figure 1 plots every one of the ~4,400 daily total-delay observations across the 12-year study period, with each point colour-coded by the day's weather category (Clear / Light / Heavy precipitation). The overlaid black line is a 30-day rolling mean. Use the range selector buttons (6m, 1y, 3y, All) to focus on different time spans, the bottom range slider to scrub through the timeline, and hover over any point to see that day's exact precipitation, snowfall, and temperature. Click legend entries to toggle weather categories on and off.
+
+**What it shows.** Three patterns are immediately visible. **(i)** The post-2021 trend rise (also seen in the static STL decomposition in the main report) is visible in the rolling-mean line. **(ii)** Heavy-precipitation days (red) are clearly over-represented in the upper tail of the delay distribution — the worst single days tend to be red or orange. **(iii)** February clusters of red points are visible in nearly every year, consistent with mid-winter snow events being the most disruptive. The interactive hover allows the reader to verify any individual point's underlying weather conditions.
+
+---
+
+# Figure 2 — Mean Delay by Day-of-Week × Month
+
+```{python}
+#| label: fig2-heatmap
+#| output: true
+
+day_order   = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+month_order = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+pivot = df_merged.pivot_table(
+    values='total_delay_mins',
+    index='day_of_week',
+    columns='month_abbr',
+    aggfunc='mean'
+).reindex(index=day_order, columns=month_order)
+
+pivot_n = df_merged.pivot_table(
+    values='total_delay_mins',
+    index='day_of_week',
+    columns='month_abbr',
+    aggfunc='count'
+).reindex(index=day_order, columns=month_order)
+
+custom = np.dstack([pivot_n.values])
+
+fig2 = go.Figure(data=go.Heatmap(
+    z=pivot.values,
+    x=pivot.columns,
+    y=pivot.index,
+    colorscale='YlOrRd',
+    colorbar=dict(title='Mean delay<br>(min)', thickness=14),
+    hovertemplate=(
+        '<b>%{y}, %{x}</b><br>'
+        'Mean delay: %{z:.0f} min<br>'
+        'Days observed: %{customdata[0]}<br>'
+        '<extra></extra>'
+    ),
+    customdata=custom,
+    text=pivot.round(0).values,
+    texttemplate='%{text:.0f}',
+    textfont=dict(size=10)
+))
+
+fig2.update_layout(
+    title=dict(
+        text='Mean Daily TTC Delay — Day of Week × Month (2014–2025)',
+        font=dict(size=16, color='#1a3a5c')
+    ),
+    xaxis=dict(title='Month', side='bottom'),
+    yaxis=dict(title='', autorange='reversed'),
+    template='plotly_white',
+    height=520,
+    margin=dict(l=100, r=30, t=80, b=60)
+)
+
+fig2.show()
+```
+
+**Caption.** Figure 2 shows the mean total daily TTC delay (in minutes) for every combination of weekday and calendar month, computed across the 2014–2025 study period. Cells are coloured on a yellow-to-red scale; the numeric annotation in each cell is the mean. Hover over any cell to see the underlying sample size — this is important because some weekday × month combinations have far more observations than others, and cells with small N should be interpreted more cautiously.
+
+**What it shows.** The heatmap reveals two robust patterns. **(i) Weekday vs. weekend.** Saturdays and Sundays (bottom two rows) consistently show lower mean delays across every month, by roughly 25–35 minutes — the weekend effect from the OLS regression is visible directly here. **(ii) February is the worst month.** Mean delays in February are uniformly the highest of the year on every weekday, consistent with Toronto's heaviest snow and freeze-thaw activity falling in mid-winter. Conversely, July through September are uniformly the lowest, providing a "fair-weather baseline" against which all other months can be compared.
+
+---
+
+# Figure 3 — XGBoost Feature Importance + Partial Dependence
+
+```{python}
+#| label: fig3-ml
+#| output: true
+
+ml_features = [
+    'precip_mm', 'snowfall_cm', 'precip_hours', 'precip_intensity',
+    'temp_max', 'temp_min', 'mean_temp_c', 'temp_range',
+    'gust_speed', 'is_weekend', 'month_num', 'dow_num'
+]
+
+split_date = pd.Timestamp('2024-01-01')
+df_train = df_merged[df_merged['date'] < split_date].copy()
+df_test  = df_merged[df_merged['date'] >= split_date].copy()
+
+X_train = df_train[ml_features].values
+y_train = df_train['total_delay_mins'].values
+
+xgb_reg = xgb.XGBRegressor(
+    n_estimators=400, max_depth=6, learning_rate=0.05,
+    subsample=0.8, colsample_bytree=0.8,
+    random_state=42, n_jobs=-1, verbosity=0
+)
+xgb_reg.fit(X_train, y_train)
+
+# Feature importance
+imp = xgb_reg.feature_importances_
+fi_df = pd.DataFrame({'feature': ml_features, 'importance': imp})
+fi_df = fi_df.sort_values('importance', ascending=True)
+
+# Partial dependence curves for top-3 features
+top3 = fi_df.tail(3)['feature'].tolist()[::-1]  # most-to-least important
+
+pd_curves = {}
+for feat in top3:
+    idx = ml_features.index(feat)
+    pdr = partial_dependence(xgb_reg, X_train, [idx], grid_resolution=50)
+    pd_curves[feat] = (pdr['grid_values'][0], pdr['average'][0])
+
+# Build subplot: importance bar (left) + PD curve switcher (right)
+fig3 = make_subplots(
+    rows=1, cols=2,
+    column_widths=[0.45, 0.55],
+    subplot_titles=('Feature Importance (XGBoost gain)',
+                    f'Partial Dependence — {top3[0]}'),
+    horizontal_spacing=0.13
+)
+
+# Left: importance bar
+top3_set = set(top3)
+colors_bar = ['#d7191c' if f in top3_set else '#abd9e9' for f in fi_df['feature']]
+fig3.add_trace(
+    go.Bar(
+        x=fi_df['importance'],
+        y=fi_df['feature'],
+        orientation='h',
+        marker=dict(color=colors_bar),
+        hovertemplate='<b>%{y}</b><br>Importance: %{x:.4f}<extra></extra>',
+        showlegend=False
+    ),
+    row=1, col=1
+)
+
+# Right: partial dependence — show top-1 by default, others as toggle-able traces
+for i, feat in enumerate(top3):
+    grid, vals = pd_curves[feat]
+    fig3.add_trace(
+        go.Scatter(
+            x=grid, y=vals,
+            mode='lines+markers',
+            name=feat,
+            line=dict(width=3),
+            marker=dict(size=5),
+            visible=(i == 0),
+            hovertemplate=(f'<b>{feat}</b><br>'
+                           'Value: %{x:.2f}<br>'
+                           'Predicted delay: %{y:.0f} min<extra></extra>')
+        ),
+        row=1, col=2
+    )
+
+# Build dropdown for PD switching
+buttons = []
+for i, feat in enumerate(top3):
+    visibility = [True]  # bar always visible
+    visibility += [j == i for j in range(len(top3))]
+    buttons.append(dict(
+        label=feat,
+        method='update',
+        args=[{'visible': visibility},
+              {'annotations[1].text': f'Partial Dependence — {feat}'}]
+    ))
+
+fig3.update_layout(
+    title=dict(
+        text='XGBoost Regressor — Feature Importance & Partial Dependence',
+        font=dict(size=16, color='#1a3a5c')
+    ),
+    template='plotly_white',
+    height=550,
+    margin=dict(l=60, r=30, t=110, b=60),
+    updatemenus=[dict(
+        type='dropdown',
+        buttons=buttons,
+        direction='down',
+        x=1.0, y=1.13,
+        xanchor='right', yanchor='top',
+        bgcolor='#f0f0f0'
+    )],
+    showlegend=False
+)
+fig3.update_xaxes(title_text='Feature value', row=1, col=2)
+fig3.update_yaxes(title_text='Predicted delay (min)', row=1, col=2)
+fig3.update_xaxes(title_text='Importance (gain)', row=1, col=1)
+
+fig3.show()
+```
+
+**Caption.** Figure 3 combines two views of the trained XGBoost regression model. The **left panel** ranks all 12 input features by their importance ("gain" — how much each feature reduces the loss when used as a split, summed across all trees). The top three features are highlighted in red. The **right panel** shows the partial-dependence curve for the currently selected feature: on the y-axis, the model's predicted total daily delay; on the x-axis, the value of the chosen feature, with all other features held at their average values. **Use the dropdown above the right panel** to switch between the top three features.
+
+**What it shows.** The top three predictors are **snowfall, mean temperature, and day-of-week** — the same three predictors that the inferential analysis (OLS coefficients and GAM smooths) highlighted as most consequential. The partial-dependence curve for snowfall is monotonically increasing, consistent with the OLS coefficient. The curve for mean temperature shows a clear **U-shape** — predicted delay is lowest in the 5–20°C range and rises in both directions — exactly reproducing the GAM smooth from Figure 5b in the main report, but obtained from an entirely different (tree-based, non-parametric) model class. This convergence across model families is strong evidence that the U-shape is a real feature of the data, not a quirk of the GAM's basis-spline parameterization.
+
+---
+
+# Bonus — Top Stations by Total Delay
+
+```{python}
+#| label: fig-stations
+#| output: true
+
+if not station_summary.empty and len(station_summary) > 0:
+    fig_stn = go.Figure()
+    fig_stn.add_trace(go.Bar(
+        x=station_summary['station_clean'],
+        y=station_summary['total_delay'],
+        marker=dict(
+            color=station_summary['avg_delay'],
+            colorscale='RdYlBu_r',
+            colorbar=dict(title='Avg delay<br>per incident<br>(min)', thickness=14),
+            line=dict(color='white', width=1)
+        ),
+        customdata=station_summary[['n_incidents', 'avg_delay']].values,
+        hovertemplate=(
+            '<b>%{x}</b><br>'
+            'Total delay: %{y:.0f} min<br>'
+            'Incidents: %{customdata[0]:,.0f}<br>'
+            'Avg per incident: %{customdata[1]:.1f} min<extra></extra>'
+        )
+    ))
+    fig_stn.update_layout(
+        title=dict(
+            text='Top 15 TTC Stations by Total Recorded Delay (2014–2025)',
+            font=dict(size=15, color='#1a3a5c')
+        ),
+        xaxis=dict(title='Station', tickangle=-35),
+        yaxis=dict(title='Total recorded delay (min)'),
+        template='plotly_white',
+        height=520,
+        margin=dict(l=70, r=30, t=90, b=140)
+    )
+    fig_stn.show()
+```
+
+**Caption (bonus figure).** Top 15 TTC subway stations ranked by cumulative recorded delay across the full study period. Bar height is total minutes of delay; bar colour encodes the average delay per individual incident at that station (blue = short individual incidents, red = long ones). Hover over a bar to see the exact incident count.
+
+**What it shows.** The bonus station-level view (a simplified version of the originally-planned station map, per the project plan) shows that delays are not uniformly distributed across the network. Major interchange stations and end-of-line terminals tend to dominate the totals, both because they handle the most trains and because incidents at these stations cascade more widely across the system. This is a useful complement to the daily-aggregate analysis in the main report and points to a natural avenue for future work: line- and station-level disaggregation of the predictive models.
+
+---
+
+# Notes on Interactivity
+
+All four figures above are fully interactive:
+
+- **Hover** over any data element to see its exact values and metadata.
+- **Click** legend entries to toggle series on and off.
+- **Use the range selector and slider** in Figure 1 to focus on specific time periods.
+- **Use the dropdown** above Figure 3's right panel to switch between feature partial-dependence views.
+- **Box/lasso select** is enabled in Figure 1 — drag a rectangle on the plot to zoom into a specific date range; double-click to reset.
+
+For the static, publication-quality versions of these visualizations (and the rest of the analysis), see the [main report](final_report.qmd).
