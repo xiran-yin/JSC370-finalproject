@@ -1,6 +1,5 @@
-# Quarto build artifacts
+# Quarto build artifacts (top-level cache only)
 /.quarto/
-*_files/
 *.html.tmp
 
 # Python
@@ -14,9 +13,6 @@ venv/
 # Jupyter cache
 .jupyter_cache/
 
-# Freeze (Quarto cache)
-# (we keep _freeze/ committed so the site can be re-rendered without re-running heavy code)
-
 # OS
 .DS_Store
 Thumbs.db
@@ -27,3 +23,5 @@ Thumbs.db
 
 # Local environment
 .env
+
+**/*.quarto_ipynb
