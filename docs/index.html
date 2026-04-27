@@ -162,7 +162,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <ul>
   <li><a href="#weather-ttc-delays" id="toc-weather-ttc-delays" class="nav-link active" data-scroll-target="#weather-ttc-delays">Weather &amp; TTC Delays</a></li>
   <li><a href="#project-overview" id="toc-project-overview" class="nav-link" data-scroll-target="#project-overview">Project Overview</a></li>
-  <li><a href="#key-findings-highlights" id="toc-key-findings-highlights" class="nav-link" data-scroll-target="#key-findings-highlights">Key Findings (Highlights)</a></li>
+  <li><a href="#key-findings" id="toc-key-findings" class="nav-link" data-scroll-target="#key-findings">Key Findings</a></li>
   <li><a href="#site-map" id="toc-site-map" class="nav-link" data-scroll-target="#site-map">Site Map</a></li>
   <li><a href="#data-sources" id="toc-data-sources" class="nav-link" data-scroll-target="#data-sources">Data Sources</a></li>
   <li><a href="#reproducibility" id="toc-reproducibility" class="nav-link" data-scroll-target="#reproducibility">Reproducibility</a></li>
@@ -195,36 +195,35 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <section id="weather-ttc-delays" class="level1 hero">
 <h1>Weather &amp; TTC Delays</h1>
-<p>A JSC370 final project by Xiran Yin — exploring how 12 years of Toronto weather data predict subway delays using machine learning and natural language processing.</p>
+<p>A JSC370 final project by Xiran Yin — exploring how 12 years of Toronto weather data predict subway delays using inferential statistics and machine learning.</p>
 </section>
 <section id="project-overview" class="level2">
 <h2 class="anchored" data-anchor-id="project-overview">Project Overview</h2>
 <p>The Toronto Transit Commission (TTC) carries over <strong>one million daily riders</strong>, making subway reliability a critical piece of urban infrastructure. This project asks a simple but practical question: <strong>can daily weather conditions predict how badly the subway will be delayed?</strong> And if so, <strong>which weather features matter most</strong>?</p>
-<p>Using <strong>4,384 daily observations from 2014–2025</strong>, this project integrates three independent data sources — historical weather records, TTC subway delay logs, and rider posts from Reddit’s <code>r/TTC</code> — to:</p>
+<p>Using <strong>roughly 4,400 daily observations from 2014–2025</strong>, this project integrates two independent data sources — historical weather records and the City of Toronto’s complete public record of TTC subway delays — to:</p>
 <ol type="1">
-<li><strong>Quantify</strong> the statistical relationship between weather and total daily delay duration through regression and Generalized Additive Models (GAM).</li>
-<li><strong>Predict</strong> delay severity using three supervised machine learning models (Linear/Logistic Regression, Random Forest, XGBoost), evaluated under both regression and classification framings.</li>
-<li><strong>Validate</strong> model findings against rider sentiment using VADER sentiment analysis and LDA topic modelling on social media discourse.</li>
+<li><strong>Quantify</strong> the statistical relationship between weather and total daily delay duration through OLS regression and Generalized Additive Models (GAM).</li>
+<li><strong>Predict</strong> delay severity using three supervised machine learning models (Linear/Logistic Regression, Random Forest, XGBoost), evaluated under both regression and classification framings on a chronologically held-out 2024–2025 test set.</li>
 </ol>
 </section>
-<section id="key-findings-highlights" class="level2">
-<h2 class="anchored" data-anchor-id="key-findings-highlights">Key Findings (Highlights)</h2>
+<section id="key-findings" class="level2">
+<h2 class="anchored" data-anchor-id="key-findings">Key Findings</h2>
 <div class="card-container">
 <section id="weather-matters-but-non-linearly" class="level3 card">
 <h3 class="anchored" data-anchor-id="weather-matters-but-non-linearly">Weather matters — but non-linearly</h3>
-<p>Snowfall has roughly <strong>10× the per-unit delay impact</strong> of liquid precipitation. The precipitation–delay relationship plateaus near 15 mm/day, and temperature effects are <strong>U-shaped</strong> (delays rise at both freezing and extreme heat).</p>
+<p>Snowfall has roughly <strong>10× the per-unit delay impact</strong> of liquid precipitation. The precipitation–delay relationship plateaus near 10 mm/day, and temperature effects are <strong>U-shaped</strong> — delays rise at both freezing and extreme heat.</p>
 </section>
 <section id="xgboost-wins" class="level3 card">
 <h3 class="anchored" data-anchor-id="xgboost-wins">XGBoost wins</h3>
-<p>Among three machine learning models, <strong>XGBoost achieves the best performance</strong> for both regression (RMSE ≈ 84 min, R² ≈ 0.18) and classification (ROC-AUC ≈ 0.74) of severe delay days. Random Forest is a close second; linear models lag substantially.</p>
+<p>Among three machine learning models, <strong>XGBoost achieves the best out-of-sample performance</strong> for both regression (continuous total delay) and classification (top-quartile severe delay days). Random Forest is a close second; linear models lag substantially.</p>
 </section>
 <section id="top-predictors" class="level3 card">
 <h3 class="anchored" data-anchor-id="top-predictors">Top predictors</h3>
 <p>Feature importance analysis ranks <strong>snowfall</strong>, <strong>mean temperature</strong>, and <strong>day-of-week</strong> as the strongest predictors of severe delay days — consistent with both the GAM smooths and the OLS coefficient signs.</p>
 </section>
-<section id="riders-agree" class="level3 card">
-<h3 class="anchored" data-anchor-id="riders-agree">Riders agree</h3>
-<p>Independent NLP analysis of <code>r/TTC</code> posts shows that sentiment drops sharply on high-delay days, and infrastructure-related complaints (Topic 3) carry the most negative VADER scores — qualitatively triangulating the quantitative findings.</p>
+<section id="convergent-evidence" class="level3 card">
+<h3 class="anchored" data-anchor-id="convergent-evidence">Convergent evidence</h3>
+<p>The same three features that explain the most variance in OLS and GAM also carry the most weight in XGBoost — convergence across linear, spline-based, and tree-based model classes.</p>
 </section>
 </div>
 </section>
@@ -257,11 +256,6 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td style="text-align: left;">Every recorded subway delay 2014–2025</td>
 <td style="text-align: left;">CKAN API</td>
 </tr>
-<tr class="odd">
-<td style="text-align: left;"><a href="https://www.reddit.com/r/TTC/">Reddit <code>r/TTC</code></a></td>
-<td style="text-align: left;">~100 recent rider posts mentioning “delay”</td>
-<td style="text-align: left;">Reddit JSON API (cached in <code>data/</code>)</td>
-</tr>
 </tbody>
 </table>
 </section>
@@ -269,11 +263,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h2 class="anchored" data-anchor-id="reproducibility">Reproducibility</h2>
 <p>The full project is reproducible from a single command. Clone the repository and run:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">quarto</span> render</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>This will re-fetch the weather and TTC data from their public APIs, load cached Reddit posts, fit all models, and rebuild the website. See the <a href="https://github.com/xiran-yin/JSC370-finalproject/blob/main/README.md">README</a> for setup instructions.</p>
+<p>This will re-fetch the weather and TTC data from their public APIs, fit all models, and rebuild the website. See the <a href="https://github.com/xiran-yin/JSC370-finalproject/blob/main/README.md">README</a> for setup instructions.</p>
 </section>
 <section id="presentation" class="level2">
 <h2 class="anchored" data-anchor-id="presentation">Presentation</h2>
-<p>A 5-minute video walkthrough of this project is available <a href="https://github.com/xiran-yin/JSC370-finalproject">here</a> (link on GitHub repo / Quercus submission).</p>
+<p>A 5-minute video walkthrough of this project is available on the GitHub repo / Quercus submission.</p>
 
 
 <!-- -->
@@ -739,72 +733,70 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>::: {.hero}</span>
 <span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="fu"># Weather &amp; TTC Delays</span></span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>A JSC370 final project by Xiran Yin — exploring how 12 years of Toronto weather data predict subway delays using machine learning and natural language processing.</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>A JSC370 final project by Xiran Yin — exploring how 12 years of Toronto weather data predict subway delays using inferential statistics and machine learning.</span>
 <span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>:::</span>
 <span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="fu">## Project Overview</span></span>
 <span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>The Toronto Transit Commission (TTC) carries over **one million daily riders**, making subway reliability a critical piece of urban infrastructure. This project asks a simple but practical question: **can daily weather conditions predict how badly the subway will be delayed?** And if so, **which weather features matter most**?</span>
 <span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>Using **4,384 daily observations from 2014–2025**, this project integrates three independent data sources — historical weather records, TTC subway delay logs, and rider posts from Reddit's <span class="in">`r/TTC`</span> — to:</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>Using **roughly 4,400 daily observations from 2014–2025**, this project integrates two independent data sources — historical weather records and the City of Toronto's complete public record of TTC subway delays — to:</span>
 <span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a><span class="ss">1. </span>**Quantify** the statistical relationship between weather and total daily delay duration through regression and Generalized Additive Models (GAM).</span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="ss">2. </span>**Predict** delay severity using three supervised machine learning models (Linear/Logistic Regression, Random Forest, XGBoost), evaluated under both regression and classification framings.</span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a><span class="ss">3. </span>**Validate** model findings against rider sentiment using VADER sentiment analysis and LDA topic modelling on social media discourse.</span>
-<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a><span class="fu">## Key Findings (Highlights)</span></span>
-<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>::: {.card-container}</span>
-<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>::: {.card}</span>
-<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a><span class="fu">### Weather matters — but non-linearly</span></span>
-<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>Snowfall has roughly **10× the per-unit delay impact** of liquid precipitation. The precipitation–delay relationship plateaus near 15 mm/day, and temperature effects are **U-shaped** (delays rise at both freezing and extreme heat).</span>
-<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>:::</span>
-<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>::: {.card}</span>
-<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a><span class="fu">### XGBoost wins</span></span>
-<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>Among three machine learning models, **XGBoost achieves the best performance** for both regression (RMSE ≈ 84 min, R² ≈ 0.18) and classification (ROC-AUC ≈ 0.74) of severe delay days. Random Forest is a close second; linear models lag substantially.</span>
-<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>:::</span>
-<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>::: {.card}</span>
-<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a><span class="fu">### Top predictors</span></span>
-<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a>Feature importance analysis ranks **snowfall**, **mean temperature**, and **day-of-week** as the strongest predictors of severe delay days — consistent with both the GAM smooths and the OLS coefficient signs.</span>
-<span id="cb2-38"><a href="#cb2-38" aria-hidden="true" tabindex="-1"></a>:::</span>
-<span id="cb2-39"><a href="#cb2-39" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-40"><a href="#cb2-40" aria-hidden="true" tabindex="-1"></a>::: {.card}</span>
-<span id="cb2-41"><a href="#cb2-41" aria-hidden="true" tabindex="-1"></a><span class="fu">### Riders agree</span></span>
-<span id="cb2-42"><a href="#cb2-42" aria-hidden="true" tabindex="-1"></a>Independent NLP analysis of <span class="in">`r/TTC`</span> posts shows that sentiment drops sharply on high-delay days, and infrastructure-related complaints (Topic 3) carry the most negative VADER scores — qualitatively triangulating the quantitative findings.</span>
-<span id="cb2-43"><a href="#cb2-43" aria-hidden="true" tabindex="-1"></a>:::</span>
-<span id="cb2-44"><a href="#cb2-44" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-45"><a href="#cb2-45" aria-hidden="true" tabindex="-1"></a>:::</span>
-<span id="cb2-46"><a href="#cb2-46" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-47"><a href="#cb2-47" aria-hidden="true" tabindex="-1"></a><span class="fu">## Site Map</span></span>
-<span id="cb2-48"><a href="#cb2-48" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-49"><a href="#cb2-49" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>**[Full Report](final_report.qmd)** — Complete written report with all figures, tables, and analysis (also available as a <span class="co">[</span><span class="ot">downloadable PDF</span><span class="co">](final_report.pdf)</span>).</span>
-<span id="cb2-50"><a href="#cb2-50" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>**[Interactive Visualizations](viz.qmd)** — Three interactive Plotly figures: a time-series explorer, a weather-by-month heatmap, and a feature-importance + partial-dependence dashboard.</span>
-<span id="cb2-51"><a href="#cb2-51" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>**[GitHub Repository](https://github.com/xiran-yin/JSC370-finalproject)** — All source code, data, and reproducible Quarto sources.</span>
-<span id="cb2-52"><a href="#cb2-52" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-53"><a href="#cb2-53" aria-hidden="true" tabindex="-1"></a><span class="fu">## Data Sources</span></span>
-<span id="cb2-54"><a href="#cb2-54" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-55"><a href="#cb2-55" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> Source <span class="pp">|</span> Coverage <span class="pp">|</span> Access <span class="pp">|</span></span>
-<span id="cb2-56"><a href="#cb2-56" aria-hidden="true" tabindex="-1"></a><span class="pp">|:-------|:---------|:-------|</span></span>
-<span id="cb2-57"><a href="#cb2-57" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> <span class="co">[</span><span class="ot">Open-Meteo Historical Weather API</span><span class="co">](https://open-meteo.com/en/docs/historical-weather-api)</span> <span class="pp">|</span> Toronto daily weather, 2014-01-01 to 2026-01-01 <span class="pp">|</span> Free public API <span class="pp">|</span></span>
-<span id="cb2-58"><a href="#cb2-58" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> <span class="co">[</span><span class="ot">Toronto Open Data — TTC Subway Delays</span><span class="co">](https://open.toronto.ca/dataset/ttc-subway-delay-data/)</span> <span class="pp">|</span> Every recorded subway delay 2014–2025 <span class="pp">|</span> CKAN API <span class="pp">|</span></span>
-<span id="cb2-59"><a href="#cb2-59" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> <span class="co">[</span><span class="ot">Reddit `r/TTC`</span><span class="co">](https://www.reddit.com/r/TTC/)</span> <span class="pp">|</span> ~100 recent rider posts mentioning "delay" <span class="pp">|</span> Reddit JSON API (cached in <span class="in">`data/`</span>) <span class="pp">|</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a><span class="ss">1. </span>**Quantify** the statistical relationship between weather and total daily delay duration through OLS regression and Generalized Additive Models (GAM).</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="ss">2. </span>**Predict** delay severity using three supervised machine learning models (Linear/Logistic Regression, Random Forest, XGBoost), evaluated under both regression and classification framings on a chronologically held-out 2024–2025 test set.</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a><span class="fu">## Key Findings</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>::: {.card-container}</span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>::: {.card}</span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a><span class="fu">### Weather matters — but non-linearly</span></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>Snowfall has roughly **10× the per-unit delay impact** of liquid precipitation. The precipitation–delay relationship plateaus near 10 mm/day, and temperature effects are **U-shaped** — delays rise at both freezing and extreme heat.</span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>:::</span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>::: {.card}</span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a><span class="fu">### XGBoost wins</span></span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>Among three machine learning models, **XGBoost achieves the best out-of-sample performance** for both regression (continuous total delay) and classification (top-quartile severe delay days). Random Forest is a close second; linear models lag substantially.</span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>:::</span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>::: {.card}</span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a><span class="fu">### Top predictors</span></span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>Feature importance analysis ranks **snowfall**, **mean temperature**, and **day-of-week** as the strongest predictors of severe delay days — consistent with both the GAM smooths and the OLS coefficient signs.</span>
+<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a>:::</span>
+<span id="cb2-38"><a href="#cb2-38" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-39"><a href="#cb2-39" aria-hidden="true" tabindex="-1"></a>::: {.card}</span>
+<span id="cb2-40"><a href="#cb2-40" aria-hidden="true" tabindex="-1"></a><span class="fu">### Convergent evidence</span></span>
+<span id="cb2-41"><a href="#cb2-41" aria-hidden="true" tabindex="-1"></a>The same three features that explain the most variance in OLS and GAM also carry the most weight in XGBoost — convergence across linear, spline-based, and tree-based model classes.</span>
+<span id="cb2-42"><a href="#cb2-42" aria-hidden="true" tabindex="-1"></a>:::</span>
+<span id="cb2-43"><a href="#cb2-43" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-44"><a href="#cb2-44" aria-hidden="true" tabindex="-1"></a>:::</span>
+<span id="cb2-45"><a href="#cb2-45" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-46"><a href="#cb2-46" aria-hidden="true" tabindex="-1"></a><span class="fu">## Site Map</span></span>
+<span id="cb2-47"><a href="#cb2-47" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-48"><a href="#cb2-48" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>**[Full Report](final_report.qmd)** — Complete written report with all figures, tables, and analysis (also available as a <span class="co">[</span><span class="ot">downloadable PDF</span><span class="co">](final_report.pdf)</span>).</span>
+<span id="cb2-49"><a href="#cb2-49" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>**[Interactive Visualizations](viz.qmd)** — Three interactive Plotly figures: a time-series explorer, a weather-by-month heatmap, and a feature-importance + partial-dependence dashboard.</span>
+<span id="cb2-50"><a href="#cb2-50" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>**[GitHub Repository](https://github.com/xiran-yin/JSC370-finalproject)** — All source code, data, and reproducible Quarto sources.</span>
+<span id="cb2-51"><a href="#cb2-51" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-52"><a href="#cb2-52" aria-hidden="true" tabindex="-1"></a><span class="fu">## Data Sources</span></span>
+<span id="cb2-53"><a href="#cb2-53" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-54"><a href="#cb2-54" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> Source <span class="pp">|</span> Coverage <span class="pp">|</span> Access <span class="pp">|</span></span>
+<span id="cb2-55"><a href="#cb2-55" aria-hidden="true" tabindex="-1"></a><span class="pp">|:-------|:---------|:-------|</span></span>
+<span id="cb2-56"><a href="#cb2-56" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> <span class="co">[</span><span class="ot">Open-Meteo Historical Weather API</span><span class="co">](https://open-meteo.com/en/docs/historical-weather-api)</span> <span class="pp">|</span> Toronto daily weather, 2014-01-01 to 2026-01-01 <span class="pp">|</span> Free public API <span class="pp">|</span></span>
+<span id="cb2-57"><a href="#cb2-57" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> <span class="co">[</span><span class="ot">Toronto Open Data — TTC Subway Delays</span><span class="co">](https://open.toronto.ca/dataset/ttc-subway-delay-data/)</span> <span class="pp">|</span> Every recorded subway delay 2014–2025 <span class="pp">|</span> CKAN API <span class="pp">|</span></span>
+<span id="cb2-58"><a href="#cb2-58" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-59"><a href="#cb2-59" aria-hidden="true" tabindex="-1"></a><span class="fu">## Reproducibility</span></span>
 <span id="cb2-60"><a href="#cb2-60" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-61"><a href="#cb2-61" aria-hidden="true" tabindex="-1"></a><span class="fu">## Reproducibility</span></span>
+<span id="cb2-61"><a href="#cb2-61" aria-hidden="true" tabindex="-1"></a>The full project is reproducible from a single command. Clone the repository and run:</span>
 <span id="cb2-62"><a href="#cb2-62" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-63"><a href="#cb2-63" aria-hidden="true" tabindex="-1"></a>The full project is reproducible from a single command. Clone the repository and run:</span>
-<span id="cb2-64"><a href="#cb2-64" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-65"><a href="#cb2-65" aria-hidden="true" tabindex="-1"></a><span class="in">```bash</span></span>
-<span id="cb2-66"><a href="#cb2-66" aria-hidden="true" tabindex="-1"></a><span class="ex">quarto</span> render</span>
-<span id="cb2-67"><a href="#cb2-67" aria-hidden="true" tabindex="-1"></a><span class="in">```</span></span>
+<span id="cb2-63"><a href="#cb2-63" aria-hidden="true" tabindex="-1"></a><span class="in">```bash</span></span>
+<span id="cb2-64"><a href="#cb2-64" aria-hidden="true" tabindex="-1"></a><span class="ex">quarto</span> render</span>
+<span id="cb2-65"><a href="#cb2-65" aria-hidden="true" tabindex="-1"></a><span class="in">```</span></span>
+<span id="cb2-66"><a href="#cb2-66" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-67"><a href="#cb2-67" aria-hidden="true" tabindex="-1"></a>This will re-fetch the weather and TTC data from their public APIs, fit all models, and rebuild the website. See the <span class="co">[</span><span class="ot">README</span><span class="co">](https://github.com/xiran-yin/JSC370-finalproject/blob/main/README.md)</span> for setup instructions.</span>
 <span id="cb2-68"><a href="#cb2-68" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-69"><a href="#cb2-69" aria-hidden="true" tabindex="-1"></a>This will re-fetch the weather and TTC data from their public APIs, load cached Reddit posts, fit all models, and rebuild the website. See the <span class="co">[</span><span class="ot">README</span><span class="co">](https://github.com/xiran-yin/JSC370-finalproject/blob/main/README.md)</span> for setup instructions.</span>
+<span id="cb2-69"><a href="#cb2-69" aria-hidden="true" tabindex="-1"></a><span class="fu">## Presentation</span></span>
 <span id="cb2-70"><a href="#cb2-70" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-71"><a href="#cb2-71" aria-hidden="true" tabindex="-1"></a><span class="fu">## Presentation</span></span>
-<span id="cb2-72"><a href="#cb2-72" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-73"><a href="#cb2-73" aria-hidden="true" tabindex="-1"></a>A 5-minute video walkthrough of this project is available <span class="co">[</span><span class="ot">here</span><span class="co">](https://github.com/xiran-yin/JSC370-finalproject)</span> (link on GitHub repo / Quercus submission).</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button" data-in-quarto-modal=""><i class="bi"></i></button></div>
+<span id="cb2-71"><a href="#cb2-71" aria-hidden="true" tabindex="-1"></a>A 5-minute video walkthrough of this project is available on the GitHub repo / Quercus submission.</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button" data-in-quarto-modal=""><i class="bi"></i></button></div>
 </div></div></div></div></div>
 </div> <!-- /content -->
 <footer class="footer">

@@ -5,31 +5,30 @@ subtitle: "Predicting Toronto Subway Disruptions with Weather Data and Machine L
 
 ::: {.hero}
 # Weather & TTC Delays
-A JSC370 final project by Xiran Yin — exploring how 12 years of Toronto weather data predict subway delays using machine learning and natural language processing.
+A JSC370 final project by Xiran Yin — exploring how 12 years of Toronto weather data predict subway delays using inferential statistics and machine learning.
 :::
 
 ## Project Overview
 
 The Toronto Transit Commission (TTC) carries over **one million daily riders**, making subway reliability a critical piece of urban infrastructure. This project asks a simple but practical question: **can daily weather conditions predict how badly the subway will be delayed?** And if so, **which weather features matter most**?
 
-Using **4,384 daily observations from 2014–2025**, this project integrates three independent data sources — historical weather records, TTC subway delay logs, and rider posts from Reddit's `r/TTC` — to:
+Using **roughly 4,400 daily observations from 2014–2025**, this project integrates two independent data sources — historical weather records and the City of Toronto's complete public record of TTC subway delays — to:
 
-1. **Quantify** the statistical relationship between weather and total daily delay duration through regression and Generalized Additive Models (GAM).
-2. **Predict** delay severity using three supervised machine learning models (Linear/Logistic Regression, Random Forest, XGBoost), evaluated under both regression and classification framings.
-3. **Validate** model findings against rider sentiment using VADER sentiment analysis and LDA topic modelling on social media discourse.
+1. **Quantify** the statistical relationship between weather and total daily delay duration through OLS regression and Generalized Additive Models (GAM).
+2. **Predict** delay severity using three supervised machine learning models (Linear/Logistic Regression, Random Forest, XGBoost), evaluated under both regression and classification framings on a chronologically held-out 2024–2025 test set.
 
-## Key Findings (Highlights)
+## Key Findings
 
 ::: {.card-container}
 
 ::: {.card}
 ### Weather matters — but non-linearly
-Snowfall has roughly **10× the per-unit delay impact** of liquid precipitation. The precipitation–delay relationship plateaus near 15 mm/day, and temperature effects are **U-shaped** (delays rise at both freezing and extreme heat).
+Snowfall has roughly **10× the per-unit delay impact** of liquid precipitation. The precipitation–delay relationship plateaus near 10 mm/day, and temperature effects are **U-shaped** — delays rise at both freezing and extreme heat.
 :::
 
 ::: {.card}
 ### XGBoost wins
-Among three machine learning models, **XGBoost achieves the best performance** for both regression (RMSE ≈ 84 min, R² ≈ 0.18) and classification (ROC-AUC ≈ 0.74) of severe delay days. Random Forest is a close second; linear models lag substantially.
+Among three machine learning models, **XGBoost achieves the best out-of-sample performance** for both regression (continuous total delay) and classification (top-quartile severe delay days). Random Forest is a close second; linear models lag substantially.
 :::
 
 ::: {.card}
@@ -38,8 +37,8 @@ Feature importance analysis ranks **snowfall**, **mean temperature**, and **day-
 :::
 
 ::: {.card}
-### Riders agree
-Independent NLP analysis of `r/TTC` posts shows that sentiment drops sharply on high-delay days, and infrastructure-related complaints (Topic 3) carry the most negative VADER scores — qualitatively triangulating the quantitative findings.
+### Convergent evidence
+The same three features that explain the most variance in OLS and GAM also carry the most weight in XGBoost — convergence across linear, spline-based, and tree-based model classes.
 :::
 
 :::
@@ -56,7 +55,6 @@ Independent NLP analysis of `r/TTC` posts shows that sentiment drops sharply on 
 |:-------|:---------|:-------|
 | [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api) | Toronto daily weather, 2014-01-01 to 2026-01-01 | Free public API |
 | [Toronto Open Data — TTC Subway Delays](https://open.toronto.ca/dataset/ttc-subway-delay-data/) | Every recorded subway delay 2014–2025 | CKAN API |
-| [Reddit `r/TTC`](https://www.reddit.com/r/TTC/) | ~100 recent rider posts mentioning "delay" | Reddit JSON API (cached in `data/`) |
 
 ## Reproducibility
 
@@ -66,8 +64,8 @@ The full project is reproducible from a single command. Clone the repository and
 quarto render
 ```
 
-This will re-fetch the weather and TTC data from their public APIs, load cached Reddit posts, fit all models, and rebuild the website. See the [README](https://github.com/xiran-yin/JSC370-finalproject/blob/main/README.md) for setup instructions.
+This will re-fetch the weather and TTC data from their public APIs, fit all models, and rebuild the website. See the [README](https://github.com/xiran-yin/JSC370-finalproject/blob/main/README.md) for setup instructions.
 
 ## Presentation
 
-A 5-minute video walkthrough of this project is available [here](https://github.com/xiran-yin/JSC370-finalproject) (link on GitHub repo / Quercus submission).
+A 5-minute video walkthrough of this project is available on the GitHub repo / Quercus submission.
