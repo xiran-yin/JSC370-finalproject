@@ -23,22 +23,22 @@ Using **4,384 daily observations from 2014–2025**, this project integrates thr
 ::: {.card-container}
 
 ::: {.card}
-### 🌧️ Weather matters — but non-linearly
+### Weather matters — but non-linearly
 Snowfall has roughly **10× the per-unit delay impact** of liquid precipitation. The precipitation–delay relationship plateaus near 15 mm/day, and temperature effects are **U-shaped** (delays rise at both freezing and extreme heat).
 :::
 
 ::: {.card}
-### 🤖 XGBoost wins
+### XGBoost wins
 Among three machine learning models, **XGBoost achieves the best performance** for both regression (RMSE ≈ 84 min, R² ≈ 0.18) and classification (ROC-AUC ≈ 0.74) of severe delay days. Random Forest is a close second; linear models lag substantially.
 :::
 
 ::: {.card}
-### 📊 Top predictors
+### Top predictors
 Feature importance analysis ranks **snowfall**, **mean temperature**, and **day-of-week** as the strongest predictors of severe delay days — consistent with both the GAM smooths and the OLS coefficient signs.
 :::
 
 ::: {.card}
-### 💬 Riders agree
+### Riders agree
 Independent NLP analysis of `r/TTC` posts shows that sentiment drops sharply on high-delay days, and infrastructure-related complaints (Topic 3) carry the most negative VADER scores — qualitatively triangulating the quantitative findings.
 :::
 
